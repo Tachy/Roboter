@@ -3,8 +3,5 @@
     "programmer": "arduino:avr:avrisp", 
     "sketch": "unkrautroboter_motorsteuerung.ino",
     "configuration": "cpu=atmega2560,baud=115200",
-    "output": "build",
-    "buildPath": "build",
-    "uploadPath": "build",    
-    "port": "/dev/ttyACM0"
+    "port": "COM3"
 }
