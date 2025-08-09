@@ -1,14 +1,18 @@
 import serial
 import time
-import cv2
 import os
+from picamera2 import Picamera2
+from picamera2.encoders import MJPEGEncoder
+from picamera2.outputs import FileOutput
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading, io
+from PIL import Image, ImageDraw, ImageFont
 
 # Setup
 USE_SIMULATED_SERIAL = True  # Auf True setzen, um die lokale Simulation zu aktivieren
-SIMULATED_SERIAL_PORT = '/tmp/ttyS1'  # Virtueller Port für die Simulation
+SIMULATED_SERIAL_PORT = '/dev/pts/2'  # Virtueller Port für die Simulation
 SERIAL_PORT = '/dev/ttyUSB0'  # Echter serieller Port
 BAUDRATE = 115200
-CAMERA_INDEX = 0
 
 # Dummy-Modus aktivieren
 USE_DUMMY = True  # Auf False setzen, wenn das echte YOLO-Modell verwendet wird
@@ -16,6 +20,10 @@ USE_DUMMY = True  # Auf False setzen, wenn das echte YOLO-Modell verwendet wird
 if not USE_DUMMY:
     from ultralytics import YOLO
     model = YOLO("pfad/zum/modell.pt")  # z. B. "best.pt"
+
+# Globale Variablen
+mode = "AUTO"  # AUTO oder MANUAL
+lock = threading.Lock()
 
 # Serielle Verbindung
 if USE_SIMULATED_SERIAL:
@@ -29,15 +37,99 @@ else:
 
 time.sleep(2)  # Zeit für Verbindungsaufbau
 
-def capture_image(filename="frame.jpg"):
-    cap = cv2.VideoCapture(CAMERA_INDEX)
-    ret, frame = cap.read()
-    cap.release()
-    if ret:
-        cv2.imwrite(filename, frame)
+# Kamera-Setup für Livestream
+picam2 = Picamera2()
+picam2.configure(picam2.create_video_configuration(main={"size": (1280, 720)}))
+
+def get_cpu_temperature():
+    """Liest die CPU-Temperatur des Raspberry Pi aus und gibt sie als String zurück."""
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+            temp = int(f.read().strip()) / 1000.0  # Temperatur in °C umrechnen
+        return f"{temp:.1f} °C"
+    except FileNotFoundError:
+        return "N/A"  # Falls die Datei nicht existiert
+
+class MJPEGOutput(io.BufferedIOBase):
+    def __init__(self):
+        self.frame = None
+        self.lock = threading.Lock()
+
+    def write(self, buf):
+        with self.lock:
+            # Frame als Bild laden
+            image = Image.open(io.BytesIO(buf))
+            draw = ImageDraw.Draw(image)
+
+            # Text hinzufügen
+            cpu_temp = get_cpu_temperature()
+            text = f"CPU: {cpu_temp}"
+            font = ImageFont.load_default()  # Standard-Schriftart
+            draw.text((10, 10), text, font=font, fill="white")
+
+            # Bild zurück in Bytes konvertieren
+            output = io.BytesIO()
+            image.save(output, format="JPEG")
+            self.frame = output.getvalue()
+
+    def read(self, size=-1):
+        with self.lock:
+            return self.frame if self.frame else b""
+
+out = MJPEGOutput()
+picam2.start_recording(MJPEGEncoder(), FileOutput(out))
+
+# HTTP-Handler für Livestream und Modussteuerung
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        global mode
+        if self.path == '/stream':
+            self.send_response(200)
+            self.send_header('Age', '0')
+            self.send_header('Cache-Control', 'no-cache, private')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=FRAME')
+            self.end_headers()
+            try:
+                while True:
+                    with out.lock:
+                        frame = out.frame
+                    if frame:
+                        self.wfile.write(b'--FRAME\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                    time.sleep(0.05)  # ~20 fps
+            except Exception:
+                pass
+        elif self.path == '/mode/auto':
+            with lock:
+                mode = "AUTO"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Mode set to AUTO")
+        elif self.path == '/mode/manual':
+            with lock:
+                mode = "MANUAL"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Mode set to MANUAL")
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+def start_http_server():
+    server = HTTPServer(('', 8080), Handler)
+    print("HTTP-Server läuft auf Port 8080...")
+    server.serve_forever()
+
+# Funktion, um ein einzelnes Frame aus dem Stream zu holen
+def capture_frame(filename="frame.jpg"):
+    with out.lock:
+        frame = out.frame
+    if frame:
+        with open(filename, "wb") as f:
+            f.write(frame)
         return filename
     else:
-        print("Fehler beim Kamerazugriff")
+        print("Kein Frame verfügbar")
         return None
 
 def extract_xy(results):
@@ -54,15 +146,19 @@ def extract_xy(results):
                 coordinates.append((x_center, y_center))
         return coordinates
 
+# Hauptloop
 def main_loop():
+    global mode
     while True:
-        if ser.in_waiting:
+        with lock:
+            current_mode = mode
+        if current_mode == "AUTO" and ser.in_waiting:
             line = ser.readline().decode().strip()
             if line == "GETXY":
                 print("Empfangen: GETXY")
 
-                # Bild aufnehmen
-                img_path = capture_image()
+                # Einzelnes Frame aus dem Stream holen
+                img_path = capture_frame()
                 if not img_path:
                     continue
 
@@ -85,12 +181,17 @@ def main_loop():
                 # Abschlussmeldung
                 ser.write(b"DONE\n")
                 print("Sende: DONE")
+        elif current_mode == "MANUAL":
+            time.sleep(0.1)  # CPU-Entlastung
 
 # Start
 try:
+    print("Starte HTTP-Server...")
+    threading.Thread(target=start_http_server, daemon=True).start()
     print("Starte Hauptloop...")
     main_loop()
 except KeyboardInterrupt:
     print("Beendet.")
 finally:
     ser.close()
+    picam2.stop_recording()
