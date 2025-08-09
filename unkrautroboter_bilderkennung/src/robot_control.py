@@ -11,6 +11,9 @@ class RobotControl:
         self.mode = "AUTO"
         self.mode_lock = threading.Lock()
         self.serial = serial_manager.SerialManager()
+        msg = "START"
+        print("-> Arduino:", msg)
+        self.send_command(msg)
 
     def get_mode(self):
         """Gibt den aktuellen Modus zurück."""
@@ -21,6 +24,9 @@ class RobotControl:
         """Setzt den Betriebsmodus (AUTO oder MANUAL)."""
         with self.mode_lock:
             self.mode = new_mode
+            msg = f"MODE:{self.mode}"
+            print("-> Arduino:", msg)
+            self.send_command(msg)
 
     def send_command(self, command):
         """Sendet ein Kommando an den Arduino."""
@@ -30,7 +36,7 @@ class RobotControl:
         """Verarbeitet die automatische Steuerung."""
         line = self.serial.read_line()
         if line == "GETXY":
-            print("Empfangen: GETXY")
+            print("<- Arduino: GETXY")
 
             # Frame aufnehmen und verarbeiten
             img_path = camera.capture_frame()
@@ -43,13 +49,13 @@ class RobotControl:
             # Koordinaten an Arduino senden
             for x, y in coords:
                 msg = f"XY:{x:.1f},{y:.1f}"
-                print("Sende:", msg)
+                print("-> Arduino:", msg)
                 self.send_command(msg)
                 time.sleep(0.05)
 
             # Abschlussmeldung
             self.send_command("DONE")
-            print("Sende: DONE")
+            print("-> Arduino:", "DONE")
 
     def handle_command(self, command):
         """Verarbeitet ein empfangenes Kommando."""

@@ -10,6 +10,15 @@
 #define RAD_UMFANG_MM        (PI * RAD_DURCHMESSER_MM)
 #define IMPULSE_PRO_MM       (ENCODER_IMPULSE_UMD / RAD_UMFANG_MM)
 
+// Betriebsmodus
+enum Mode {
+  WAITING_FOR_START,  // Initialer Zustand
+  MANUAL,
+  AUTO
+};
+
+Mode currentMode = WAITING_FOR_START;  // Startet im Wartezustand
+
 // BTS7960 Pins (Räder)
 #define RPWM_L 5
 #define LPWM_L 6
@@ -342,26 +351,71 @@ void anfrageUndAbarbeiten() {
 }
 
 
-void loop() {
+// Betriebsmodus
+enum Mode {
+  MANUAL,
+  AUTO
+};
 
-  if (Serial1.available()) {
-    String cmd = Serial1.readStringUntil('\n');
+Mode currentMode = AUTO;  // Startet im automatischen Modus
+
+void processSerialCommand() {
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
     cmd.trim();
-    if (cmd == "START") {
-      anfrageUndAbarbeiten();
+    
+    // Warte im WAITING_FOR_START Zustand auf das START-Signal
+    if (currentMode == WAITING_FOR_START) {
+      if (cmd == "START") {
+        currentMode = MANUAL;  // Nach START in MANUAL-Modus wechseln
+        Serial.println("START empfangen - Wechsel zu MANUAL Modus");
+      }
+      return;  // Ignoriere alle anderen Befehle im Wartezustand
+    }
+    
+    // Normale Befehlsverarbeitung nach dem Start
+    if (cmd.startsWith("MODE:")) {
+      String mode = cmd.substring(5);  // Extrahiere Teil nach "MODE:"
+      if (mode == "AUTO") {
+        currentMode = AUTO;
+        Serial.println("Modus gewechselt zu AUTO");
+      } else if (mode == "MANUAL") {
+        currentMode = MANUAL;
+        Serial.println("Modus gewechselt zu MANUAL");
+      }
+    }
+    else if (currentMode == MANUAL) {
+      // Verarbeite manuelle Kommandos hier
+      processManualCommand(cmd);
     }
   }
+}
 
-  // Beispiel-Ablauf
-  delay(1000);
-  setzeXPosition(100.0);
-  delay(1000);
-  kalibriereZ();
-  delay(1000);
-  senkeBuersteZuPosition(160 * IMPULSE_Z_PRO_MM);
-  delay(1000);
-  fahreStrecke(500, true, true);
-  delay(3000);
-  while (1);
+void processManualCommand(String cmd) {
+  // Hier können Sie spezifische manuelle Kommandos verarbeiten
+  if (cmd == "START") {
+    anfrageUndAbarbeiten();
+  }
+  // Weitere manuelle Kommandos hier hinzufügen
+}
+
+void loop() {
+  processSerialCommand();  // Prüfe auf neue Kommandos
+  
+  if (currentMode == WAITING_FOR_START) {
+    // Im Wartezustand blinken wir eine LED oder geben periodisch eine Nachricht aus
+    static unsigned long lastBlink = 0;
+    if (millis() - lastBlink > 1000) {  // Jede Sekunde
+      Serial.println("Warte auf START Signal...");
+      lastBlink = millis();
+    }
+  }
+  else if (currentMode == AUTO) {
+    // Im Auto-Modus kontinuierlich anfragen und abarbeiten
+    anfrageUndAbarbeiten();
+  }
+  
+  // Kleine Pause um CPU-Last zu reduzieren
+  delay(10);
 }
 
