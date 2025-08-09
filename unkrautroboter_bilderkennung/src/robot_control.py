@@ -4,7 +4,7 @@ Hauptmodul für die Robotersteuerung.
 
 import threading
 import time
-from . import config, camera, udp_server, serial_manager, yolo_detector
+from . import config, camera, serial_manager, yolo_detector, udp_server
 
 class RobotControl:
     def __init__(self):
@@ -51,9 +51,22 @@ class RobotControl:
             self.send_command("DONE")
             print("Sende: DONE")
 
+    def handle_command(self, command):
+        """Verarbeitet ein empfangenes Kommando."""
+        if self.get_mode() == "MANUAL":
+            if ",BUTTON:1" in command:
+                command = command.replace(",BUTTON:1", "")
+            self.send_command(command)
+            return True
+        return False
+
     def run(self):
         """Hauptschleife der Robotersteuerung."""
         try:
+            # Callbacks registrieren
+            udp_server.on_mode_change = self.set_mode
+            udp_server.on_command = self.handle_command
+            
             print("Starte HTTP-Server...")
             threading.Thread(target=camera.start_http_server, daemon=True).start()
             

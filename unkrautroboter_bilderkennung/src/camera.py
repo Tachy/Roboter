@@ -81,24 +81,59 @@ def get_cpu_temperature():
 # Kamera-Setup
 picam2 = Picamera2()
 picam2.configure(picam2.create_video_configuration(main={"size": config.CAMERA_RESOLUTION}))
+picam2.start()  # Kamera grundsätzlich starten
 stream_output = MJPEGOutput()
 stream_active = False
 
 def start_stream():
     """Startet den Video-Stream."""
     global stream_active
-    if not stream_active:
-        picam2.start_recording(MJPEGEncoder(), FileOutput(stream_output))
-        stream_active = True
-        print("Stream aktiviert.")
+    try:
+        if not stream_active:
+            # Stelle sicher, dass die Kamera läuft
+            if not picam2.started:
+                picam2.start()
+                time.sleep(0.5)
+            picam2.start_recording(MJPEGEncoder(), FileOutput(stream_output))
+            stream_active = True
+            print("Stream aktiviert.")
+    except Exception as e:
+        print(f"Fehler beim Starten des Streams: {str(e)}")
+        stream_active = False  # Setze Status auf inaktiv bei Fehler
 
 def stop_stream():
     """Stoppt den Video-Stream."""
     global stream_active
-    if stream_active:
-        picam2.stop_recording()
-        stream_active = False
-        print("Stream deaktiviert.")
+    try:
+        if stream_active:
+            picam2.stop_recording()
+            stream_active = False
+            print("Stream deaktiviert.")
+    except Exception as e:
+        print(f"Fehler beim Stoppen des Streams: {str(e)}")
+        stream_active = False  # Setze Status trotzdem auf inaktiv
+
+def is_streaming():
+    """Prüft, ob der Stream aktiv ist."""
+    return stream_active
+
+def capture_image(filename):
+    """Nimmt ein einzelnes Bild auf."""
+    try:
+        print("Debug: Starte Bildaufnahme...")
+        # Stelle sicher, dass die Kamera läuft
+        if not picam2.started:
+            print("Debug: Starte Kamera...")
+            picam2.start()
+            time.sleep(0.5)
+            
+        # Bild aufnehmen, ohne den Stream zu unterbrechen
+        picam2.capture_file(filename)
+        print(f"Debug: Bild erfolgreich aufgenommen: {filename}")
+            
+    except Exception as e:
+        print(f"Fehler bei der Bildaufnahme: {str(e)}")
+    print("Stream aktiviert.")
 
 def capture_frame(filename="frame.jpg"):
     """Speichert das aktuelle Frame als Bild."""
