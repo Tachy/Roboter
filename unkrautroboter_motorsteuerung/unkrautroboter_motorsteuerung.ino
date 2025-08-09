@@ -68,8 +68,10 @@ volatile long encoderRechts = 0;
 volatile long encoderX = 0;
 volatile long encoderZ = 0;
 
-#define MAX_KOORDINATEN 50
+// Maximale Länge für einen Befehl über die serielle Schnittstelle
+#define MAX_CMD_LENGTH 50
 
+#define MAX_KOORDINATEN 50
 struct Zielpunkt {
   float x_mm;
   float y_mm;
@@ -355,9 +357,6 @@ void anfrageUndAbarbeiten() {
   }
 }
 
-// Maximale Länge für einen Befehl
-#define MAX_CMD_LENGTH 50
-
 // Liest eine Zeile von Serial1 und gibt true zurück, wenn eine vollständige Zeile gelesen wurde
 bool readSerialLine(String &buffer) {
   while (Serial1.available()) {
@@ -445,18 +444,38 @@ void processJoystickCommand(int x, int y) {
   Serial.print(" Y=");
   Serial.println(y);
   
-  // TODO: Hier die Motorsteuerung basierend auf x und y implementieren
-  // x: links/rechts (-100 bis +100)
-  // y: vorwärts/rückwärts (-100 bis +100)
+  // Normalisiere x und y auf -1.0 bis 1.0
+  float xNorm = x / 100.0;
+  float yNorm = y / 100.0;
   
-  // Beispiel für die Motoransteuerung (muss angepasst werden):
-  /*
-  int pwmLeft = map(y + x, -200, 200, -255, 255);   // y+x für links
-  int pwmRight = map(y - x, -200, 200, -255, 255);  // y-x für rechts
+  // Berechne Basis-Geschwindigkeiten für beide Räder
+  float leftSpeed = -yNorm;   // Negativ weil -Y = vorwärts
+  float rightSpeed = -yNorm;  // Negativ weil -Y = vorwärts
   
-  pwmLeft = constrain(pwmLeft, -255, 255);
-  pwmRight = constrain(pwmRight, -255, 255);
+  // Füge Drehkomponente hinzu
+  // Bei positivem X (rechts) muss links schneller als rechts
+  // Bei negativem X (links) muss rechts schneller als links
+  if (xNorm > 0) {
+    // Rechtsdrehung
+    rightSpeed *= (1.0 - xNorm);  // Rechtes Rad wird langsamer
+    leftSpeed *= 1.0;             // Linkes Rad behält Geschwindigkeit
+  } else {
+    // Linksdrehung
+    leftSpeed *= (1.0 + xNorm);   // Linkes Rad wird langsamer (xNorm ist negativ)
+    rightSpeed *= 1.0;            // Rechtes Rad behält Geschwindigkeit
+  }
   
+  // Reine Drehung (wenn y = 0)
+  if (abs(yNorm) < 0.1 && abs(xNorm) > 0.1) {
+    leftSpeed = xNorm;    // Positives X = links vorwärts
+    rightSpeed = -xNorm;  // Positives X = rechts rückwärts
+  }
+  
+  // Wandle in PWM-Werte um (-200 bis 200)
+  int pwmLeft = constrain((int)(leftSpeed * PWM_MAX), -PWM_MAX, PWM_MAX);
+  int pwmRight = constrain((int)(rightSpeed * PWM_MAX), -PWM_MAX, PWM_MAX);
+  
+  // Setze Motoren
   // Links
   if (pwmLeft > 0) {
     analogWrite(RPWM_L, pwmLeft);
@@ -474,7 +493,12 @@ void processJoystickCommand(int x, int y) {
     analogWrite(RPWM_R, 0);
     analogWrite(LPWM_R, -pwmRight);
   }
-  */
+  
+  // Debug-Ausgabe der Motorwerte
+  Serial.print("Motor PWM - Links: ");
+  Serial.print(pwmLeft);
+  Serial.print(" Rechts: ");
+  Serial.println(pwmRight);
 }
 
 void loop() {
