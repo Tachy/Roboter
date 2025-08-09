@@ -2,9 +2,9 @@ import serial
 import time
 import os
 import socket
-from picamera2 import Picamera2
-from picamera2.encoders import MJPEGEncoder
-from picamera2.outputs import FileOutput
+from picamera2 import Picamera2 # type: ignore
+from picamera2.encoders import MJPEGEncoder # type: ignore
+from picamera2.outputs import FileOutput # type: ignore
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading, io
 from PIL import Image, ImageDraw, ImageFont
@@ -185,9 +185,11 @@ def udp_joystick_server():
         with lock:
             if mode == "MANUAL":
                 print(f"Joystick-Befehl empfangen: {command} (von {addr})")
-                if "BUTTON:1" in command:  # Feuerknopf 1 gedrückt
+                # BUTTON:1 auswerten, aber nicht an Arduino senden
+                if ",BUTTON:1" in command:
                     save_training_image()
-                # Joystick-Befehl an Arduino weiterleiten
+                    command = command.replace(",BUTTON:1", "")
+                # Nur X und Y an Arduino weiterleiten
                 ser.write(f"{command}\n".encode())
                 print(f"Joystick-Befehl an Arduino gesendet: {command}")
             else:
