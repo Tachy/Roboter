@@ -8,6 +8,7 @@
         body {
             font-family: Arial, sans-serif;
             display: flex;
+            flex-direction: column;
             justify-content: center;
             align-items: center;
             height: 100vh;
@@ -19,17 +20,54 @@
             padding: 20px;
             border-radius: 10px;
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            text-align: center;
         }
         img {
-            width: 1280px;  /* Anpassung der Bildgrö�~_e */
+            width: 1280px;
             height: 720px;
         }
+        #mode-selector {
+            margin-top: 20px;
+        }
+        select {
+            padding: 10px;
+            font-size: 16px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+        }
     </style>
+    <script>
+        async function changeMode() {
+            const mode = document.getElementById("mode").value;
+            const udpPort = 5005; // Der UDP-Port des Raspberry Pi
+            const udpHost = "192.168.179.252"; // IP-Adresse des Raspberry Pi
+
+            try {
+                // Erstelle einen UDP-Socket
+                const socket = new DatagramSocket();
+                const message = new TextEncoder().encode(mode);
+
+                // Sende den Modus über UDP
+                socket.send(message, 0, message.length, udpPort, udpHost, () => {
+                    socket.close(); // Schließe den Socket nach dem Senden
+                });
+            } catch (error) {
+                console.error(`Fehler beim Senden des Modus: ${error.message}`);
+            }
+        }
+    </script>
 </head>
 <body>
     <div id="video-container">
         <h2>Live MJPEG Stream</h2>
         <img src="http://192.168.179.252:8080/stream" alt="MJPEG Stream">
+        <div id="mode-selector">
+            <label for="mode">Modus wechseln:</label>
+            <select id="mode" onchange="changeMode()">
+                <option value="AUTO">AUTO</option>
+                <option value="MANUAL">MANUAL</option>
+            </select>
+        </div>
     </div>
 </body>
 </html>

@@ -1,6 +1,7 @@
 import serial
 import time
 import os
+import socket
 from picamera2 import Picamera2
 from picamera2.encoders import MJPEGEncoder
 from picamera2.outputs import FileOutput
@@ -11,8 +12,12 @@ from PIL import Image, ImageDraw, ImageFont
 # Setup
 USE_SIMULATED_SERIAL = True  # Auf True setzen, um die lokale Simulation zu aktivieren
 SIMULATED_SERIAL_PORT = '/dev/pts/2'  # Virtueller Port für die Simulation
-SERIAL_PORT = '/dev/ttyUSB0'  # Echter serieller Port
+SERIAL_PORT = '/dev/serial0'  # Echter serieller Port
 BAUDRATE = 115200
+
+# UDP-Steuerkanal
+UDP_IP = "0.0.0.0"  # Hört auf alle Schnittstellen
+UDP_PORT = 5005     # Port für den Steuerkanal
 
 # Dummy-Modus aktivieren
 USE_DUMMY = True  # Auf False setzen, wenn das echte YOLO-Modell verwendet wird
@@ -46,7 +51,7 @@ def get_cpu_temperature():
     try:
         with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
             temp = int(f.read().strip()) / 1000.0  # Temperatur in °C umrechnen
-        return f"{temp:.1f} °C"
+        return f"{temp:.0f} °C"
     except FileNotFoundError:
         return "N/A"  # Falls die Datei nicht existiert
 
@@ -61,11 +66,16 @@ class MJPEGOutput(io.BufferedIOBase):
             image = Image.open(io.BytesIO(buf))
             draw = ImageDraw.Draw(image)
 
-            # Text hinzufügen
+            # Text hinzufügen: CPU-Temperatur
             cpu_temp = get_cpu_temperature()
-            text = f"CPU: {cpu_temp}"
+            text_temp = f"CPU: {cpu_temp}"
             font = ImageFont.load_default()  # Standard-Schriftart
-            draw.text((10, 10), text, font=font, fill="white")
+            draw.text((10, 10), text_temp, font=font, fill="white")
+
+            # Text hinzufügen: Aktueller Modus
+            global mode
+            text_mode = f"Modus: {mode}"
+            draw.text((10, 30), text_mode, font=font, fill="white")
 
             # Bild zurück in Bytes konvertieren
             output = io.BytesIO()
@@ -79,10 +89,9 @@ class MJPEGOutput(io.BufferedIOBase):
 out = MJPEGOutput()
 picam2.start_recording(MJPEGEncoder(), FileOutput(out))
 
-# HTTP-Handler für Livestream und Modussteuerung
+# HTTP-Handler für Livestream
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        global mode
         if self.path == '/stream':
             self.send_response(200)
             self.send_header('Age', '0')
@@ -99,18 +108,6 @@ class Handler(BaseHTTPRequestHandler):
                     time.sleep(0.05)  # ~20 fps
             except Exception:
                 pass
-        elif self.path == '/mode/auto':
-            with lock:
-                mode = "AUTO"
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"Mode set to AUTO")
-        elif self.path == '/mode/manual':
-            with lock:
-                mode = "MANUAL"
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"Mode set to MANUAL")
         else:
             self.send_response(404)
             self.end_headers()
@@ -119,6 +116,22 @@ def start_http_server():
     server = HTTPServer(('', 8080), Handler)
     print("HTTP-Server läuft auf Port 8080...")
     server.serve_forever()
+
+# UDP-Steuerkanal
+def udp_control_server():
+    global mode
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((UDP_IP, UDP_PORT))
+    print(f"UDP-Steuerkanal läuft auf Port {UDP_PORT}...")
+    while True:
+        data, addr = sock.recvfrom(1024)  # Empfang von Daten (max. 1024 Bytes)
+        command = data.decode().strip().upper()
+        if command in ["AUTO", "MANUAL"]:
+            with lock:
+                mode = command
+            print(f"Modus auf {mode} geändert (von {addr})")
+        else:
+            print(f"Unbekannter Befehl: {command} (von {addr})")
 
 # Funktion, um ein einzelnes Frame aus dem Stream zu holen
 def capture_frame(filename="frame.jpg"):
@@ -188,6 +201,8 @@ def main_loop():
 try:
     print("Starte HTTP-Server...")
     threading.Thread(target=start_http_server, daemon=True).start()
+    print("Starte UDP-Steuerkanal...")
+    threading.Thread(target=udp_control_server, daemon=True).start()
     print("Starte Hauptloop...")
     main_loop()
 except KeyboardInterrupt:
