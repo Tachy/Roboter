@@ -318,24 +318,24 @@ void anfrageUndAbarbeiten() {
   zielCount = 0;
   unsigned long start = millis();
   String cmdBuffer = "";
+  
   while (millis() - start < 5000) {
-    if (Serial1.available()) {
-      char c = Serial1.read();
-      cmdBuffer += c;
-      
-      // Prüfe auf bekannte Befehle
+    if (readSerialLine(cmdBuffer)) {
+      // Prüfe auf Ende der Übertragung
       if (cmdBuffer == "DONE") {
-        cmdBuffer = "";  // Buffer zurücksetzen
         break;
       }
+      // Verarbeite Koordinaten
       if (cmdBuffer.startsWith("XY:")) {
-        int kommateil = zeile.indexOf(',');
+        int kommateil = cmdBuffer.indexOf(',');
         if (kommateil > 3 && zielCount < MAX_KOORDINATEN) {
-          float x = zeile.substring(3, kommateil).toFloat();
-          float y = zeile.substring(kommateil + 1).toFloat();
+          float x = cmdBuffer.substring(3, kommateil).toFloat();
+          float y = cmdBuffer.substring(kommateil + 1).toFloat();
           ziele[zielCount++] = {x, y};
         }
       }
+      // Buffer zurücksetzen
+      cmdBuffer = "";
     }
   }
 
@@ -358,33 +358,39 @@ void anfrageUndAbarbeiten() {
 // Maximale Länge für einen Befehl
 #define MAX_CMD_LENGTH 50
 
-void processSerialCommand() {
-  static String cmdBuffer = "";
-  static bool lineComplete = false;
-  
-  while (Serial1.available() && !lineComplete) {
+// Liest eine Zeile von Serial1 und gibt true zurück, wenn eine vollständige Zeile gelesen wurde
+bool readSerialLine(String &buffer) {
+  while (Serial1.available()) {
     char c = Serial1.read();
     
     // Zeile vollständig wenn \n empfangen
     if (c == '\n') {
-      lineComplete = true;
+      return true;
     }
     // Ignoriere CR
     else if (c == '\r') {
       continue;
     }
     // Füge Zeichen zum Buffer hinzu wenn noch Platz
-    else if (cmdBuffer.length() < MAX_CMD_LENGTH) {
-      cmdBuffer += c;
+    else if (buffer.length() < MAX_CMD_LENGTH) {
+      buffer += c;
     }
     
     // Buffer-Überlauf: Verwerfe alles bis zum nächsten Zeilenende
-    if (cmdBuffer.length() >= MAX_CMD_LENGTH && !lineComplete) {
-      cmdBuffer = "";
+    if (buffer.length() >= MAX_CMD_LENGTH) {
+      buffer = "";
       while (Serial1.available() && Serial1.read() != '\n');
-      return;
+      return false;
     }
   }
+  return false;
+}
+
+void processSerialCommand() {
+  static String cmdBuffer = "";
+  bool lineComplete = false;
+  
+  lineComplete = readSerialLine(cmdBuffer);
   
   // Verarbeite nur vollständige Zeilen
   if (lineComplete) {
