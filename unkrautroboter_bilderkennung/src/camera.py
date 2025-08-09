@@ -151,6 +151,9 @@ def capture_frame(filename="frame.jpg"):
         # Stream ist nicht aktiv, Einzelbild aufnehmen
         image = picam2.capture_array()
         img = Image.fromarray(image)
+        # Konvertiere zu RGB wenn nötig
+        if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+            img = img.convert('RGB')
         img.save(filename, format="JPEG")
         return filename
 

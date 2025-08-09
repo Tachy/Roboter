@@ -317,13 +317,18 @@ void anfrageUndAbarbeiten() {
 
   zielCount = 0;
   unsigned long start = millis();
+  String cmdBuffer = "";
   while (millis() - start < 5000) {
     if (Serial1.available()) {
-      String zeile = Serial1.readStringUntil('\n');
-      zeile.trim();
-
-      if (zeile == "DONE") break;
-      if (zeile.startsWith("XY:")) {
+      char c = Serial1.read();
+      cmdBuffer += c;
+      
+      // Prüfe auf bekannte Befehle
+      if (cmdBuffer == "DONE") {
+        cmdBuffer = "";  // Buffer zurücksetzen
+        break;
+      }
+      if (cmdBuffer.startsWith("XY:")) {
         int kommateil = zeile.indexOf(',');
         if (kommateil > 3 && zielCount < MAX_KOORDINATEN) {
           float x = zeile.substring(3, kommateil).toFloat();
@@ -350,43 +355,42 @@ void anfrageUndAbarbeiten() {
   }
 }
 
-
-// Betriebsmodus
-enum Mode {
-  MANUAL,
-  AUTO
-};
-
-Mode currentMode = AUTO;  // Startet im automatischen Modus
-
 void processSerialCommand() {
-  if (Serial.available()) {
-    String cmd = Serial.readStringUntil('\n');
-    cmd.trim();
+  static String cmdBuffer = "";
+  
+  while (Serial1.available()) {
+    char c = Serial1.read();
+    cmdBuffer += c;
     
-    // Warte im WAITING_FOR_START Zustand auf das START-Signal
-    if (currentMode == WAITING_FOR_START) {
-      if (cmd == "START") {
+    // Prüfe auf bekannte Befehle
+    if (cmdBuffer == "START") {
+      if (currentMode == WAITING_FOR_START) {
         currentMode = MANUAL;  // Nach START in MANUAL-Modus wechseln
         Serial.println("START empfangen - Wechsel zu MANUAL Modus");
       }
-      return;  // Ignoriere alle anderen Befehle im Wartezustand
+      cmdBuffer = "";  // Buffer zurücksetzen
+      return;
     }
     
     // Normale Befehlsverarbeitung nach dem Start
-    if (cmd.startsWith("MODE:")) {
-      String mode = cmd.substring(5);  // Extrahiere Teil nach "MODE:"
-      if (mode == "AUTO") {
-        currentMode = AUTO;
-        Serial.println("Modus gewechselt zu AUTO");
-      } else if (mode == "MANUAL") {
-        currentMode = MANUAL;
-        Serial.println("Modus gewechselt zu MANUAL");
-      }
+    if (cmdBuffer == "MODE:AUTO") {
+      currentMode = AUTO;
+      Serial.println("Modus gewechselt zu AUTO");
+      cmdBuffer = "";
+    } 
+    else if (cmdBuffer == "MODE:MANUAL") {
+      currentMode = MANUAL;
+      Serial.println("Modus gewechselt zu MANUAL");
+      cmdBuffer = "";
     }
-    else if (currentMode == MANUAL) {
-      // Verarbeite manuelle Kommandos hier
-      processManualCommand(cmd);
+    else if (cmdBuffer == "GETXY") {
+      processManualCommand("GETXY");
+      cmdBuffer = "";
+    }
+    
+    // Buffer zurücksetzen wenn er zu lang wird
+    if (cmdBuffer.length() > 20) {
+      cmdBuffer = "";
     }
   }
 }
