@@ -39,24 +39,15 @@
     <script>
         async function changeMode() {
             const mode = document.getElementById("mode").value;
-            const udpPort = 5005; // Der UDP-Port des Raspberry Pi
-            const udpHost = "192.168.179.252"; // IP-Adresse des Raspberry Pi
 
+            // Sende den Modus an das PHP-Skript
             try {
-                // Erstelle einen UDP-Socket
-                alert("test");
-                
-                const socket = new DatagramSocket();
-
-                alert("test");
-                
-                const message = new TextEncoder().encode(mode);
-
-                alert("test");
-
-                // Sende den Modus über UDP
-                socket.send(message, 0, message.length, udpPort, udpHost, () => {
-                    socket.close(); // Schließe den Socket nach dem Senden
+                await fetch("send_udp.php", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                    body: `mode=${mode}`,
                 });
             } catch (error) {
                 console.error(`Fehler beim Senden des Modus: ${error.message}`);

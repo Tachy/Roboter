@@ -15,9 +15,10 @@ SIMULATED_SERIAL_PORT = '/dev/pts/2'  # Virtueller Port für die Simulation
 SERIAL_PORT = '/dev/serial0'  # Echter serieller Port
 BAUDRATE = 115200
 
-# UDP-Steuerkanal
+# UDP-Steuerkanäle
 UDP_IP = "0.0.0.0"  # Hört auf alle Schnittstellen
-UDP_PORT = 5005     # Port für den Steuerkanal
+UDP_CONTROL_PORT = 5005  # Port für Modusumschaltung
+UDP_JOYSTICK_PORT = 5006  # Port für Joystick-Kommandos
 
 # Dummy-Modus aktivieren
 USE_DUMMY = True  # Auf False setzen, wenn das echte YOLO-Modell verwendet wird
@@ -117,12 +118,12 @@ def start_http_server():
     print("HTTP-Server läuft auf Port 8080...")
     server.serve_forever()
 
-# UDP-Steuerkanal
+# UDP-Steuerkanal für Modusumschaltung
 def udp_control_server():
     global mode
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind((UDP_IP, UDP_PORT))
-    print(f"UDP-Steuerkanal läuft auf Port {UDP_PORT}...")
+    sock.bind((UDP_IP, UDP_CONTROL_PORT))
+    print(f"UDP-Steuerkanal läuft auf Port {UDP_CONTROL_PORT}...")
     while True:
         data, addr = sock.recvfrom(1024)  # Empfang von Daten (max. 1024 Bytes)
         command = data.decode().strip().upper()
@@ -132,6 +133,23 @@ def udp_control_server():
             print(f"Modus auf {mode} geändert (von {addr})")
         else:
             print(f"Unbekannter Befehl: {command} (von {addr})")
+
+# UDP-Server für Joystick-Kommandos
+def udp_joystick_server():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((UDP_IP, UDP_JOYSTICK_PORT))
+    print(f"UDP-Joystick-Server läuft auf Port {UDP_JOYSTICK_PORT}...")
+    while True:
+        data, addr = sock.recvfrom(1024)  # Empfang von Daten (max. 1024 Bytes)
+        command = data.decode().strip()
+        with lock:
+            if mode == "MANUAL":
+                print(f"Joystick-Befehl empfangen: {command} (von {addr})")
+                # Joystick-Befehl an Arduino weiterleiten
+                ser.write(f"{command}\n".encode())
+                print(f"Joystick-Befehl an Arduino gesendet: {command}")
+            else:
+                print(f"Joystick-Befehl ignoriert, da Modus {mode} aktiv ist.")
 
 # Funktion, um ein einzelnes Frame aus dem Stream zu holen
 def capture_frame(filename="frame.jpg"):
@@ -203,6 +221,8 @@ try:
     threading.Thread(target=start_http_server, daemon=True).start()
     print("Starte UDP-Steuerkanal...")
     threading.Thread(target=udp_control_server, daemon=True).start()
+    print("Starte UDP-Joystick-Server...")
+    threading.Thread(target=udp_joystick_server, daemon=True).start()
     print("Starte Hauptloop...")
     main_loop()
 except KeyboardInterrupt:
