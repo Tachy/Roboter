@@ -8,6 +8,7 @@ from picamera2.outputs import FileOutput
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading, io
 from PIL import Image, ImageDraw, ImageFont
+import glob
 
 # Setup
 USE_SIMULATED_SERIAL = True  # Auf True setzen, um die lokale Simulation zu aktivieren
@@ -134,6 +135,24 @@ def udp_control_server():
         else:
             print(f"Unbekannter Befehl: {command} (von {addr})")
 
+# Funktion, um die nächste Bildnummer zu ermitteln
+def get_next_image_number(directory="./training/"):
+    if not os.path.exists(directory):
+        os.makedirs(directory)  # Verzeichnis erstellen, falls nicht vorhanden
+    files = glob.glob(os.path.join(directory, "bild_*.jpg"))
+    if not files:
+        return 1  # Start bei 1, wenn keine Dateien vorhanden sind
+    numbers = [int(os.path.basename(f).split("_")[1].split(".")[0]) for f in files]
+    return max(numbers) + 1
+
+# Funktion, um ein Bild aufzunehmen und zu speichern
+def save_training_image():
+    img_path = "./training/"
+    next_number = get_next_image_number(img_path)
+    filename = os.path.join(img_path, f"bild_{next_number:04d}.jpg")
+    picam2.capture_file(filename)
+    print(f"Bild gespeichert: {filename}")
+
 # UDP-Server für Joystick-Kommandos
 def udp_joystick_server():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -145,6 +164,8 @@ def udp_joystick_server():
         with lock:
             if mode == "MANUAL":
                 print(f"Joystick-Befehl empfangen: {command} (von {addr})")
+                if "BUTTON:1" in command:  # Feuerknopf 1 gedrückt
+                    save_training_image()
                 # Joystick-Befehl an Arduino weiterleiten
                 ser.write(f"{command}\n".encode())
                 print(f"Joystick-Befehl an Arduino gesendet: {command}")

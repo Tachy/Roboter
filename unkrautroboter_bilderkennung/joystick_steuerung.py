@@ -26,11 +26,14 @@ def joystick_to_udp(joystick):
         pygame.event.pump()  # Joystick-Events verarbeiten
         x_axis = joystick.get_axis(0)  # X-Achse
         y_axis = joystick.get_axis(1)  # Y-Achse
+        button_1 = joystick.get_button(0)  # Feuerknopf 1 (Index 0)
 
         # Werte skalieren und formatieren
         x_value = int(x_axis * 100)  # Wertebereich -100 bis 100
         y_value = int(y_axis * 100)  # Wertebereich -100 bis 100
         message = f"JOYSTICK:X={x_value},Y={y_value}"
+        if button_1:
+            message += ",BUTTON:1"
 
         # Nachricht senden
         sock.sendto(message.encode(), (UDP_IP, UDP_PORT))
