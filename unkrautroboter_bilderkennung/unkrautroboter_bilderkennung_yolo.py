@@ -1,6 +1,5 @@
 import serial
 import time
-from ultralytics import YOLO
 import cv2
 
 # Setup
@@ -8,8 +7,12 @@ SERIAL_PORT = '/dev/ttyUSB0'  # oder /dev/ttyAMA0, je nach Anschluss
 BAUDRATE = 115200
 CAMERA_INDEX = 0
 
-# Modell laden
-model = YOLO("pfad/zum/modell.pt")  # z. B. "best.pt"
+# Dummy-Modus aktivieren
+USE_DUMMY = True  # Auf False setzen, wenn das echte YOLO-Modell verwendet wird
+
+if not USE_DUMMY:
+    from ultralytics import YOLO
+    model = YOLO("pfad/zum/modell.pt")  # z. B. "best.pt"
 
 # Serielle Verbindung
 ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=1)
@@ -27,13 +30,18 @@ def capture_image(filename="frame.jpg"):
         return None
 
 def extract_xy(results):
-    coordinates = []
-    for result in results:
-        for box in result.boxes:
-            x_center = float(box.xywh[0][0])
-            y_center = float(box.xywh[0][1])
-            coordinates.append((x_center, y_center))
-    return coordinates
+    if USE_DUMMY:
+        # Dummy-Koordinaten zurückgeben
+        return [(100.0, 200.0)]  # Beispielkoordinaten
+    else:
+        # Echte Koordinaten aus YOLO-Ergebnissen extrahieren
+        coordinates = []
+        for result in results:
+            for box in result.boxes:
+                x_center = float(box.xywh[0][0])
+                y_center = float(box.xywh[0][1])
+                coordinates.append((x_center, y_center))
+        return coordinates
 
 def main_loop():
     while True:
@@ -47,8 +55,11 @@ def main_loop():
                 if not img_path:
                     continue
 
-                # YOLO ausführen
-                results = model(img_path)
+                # YOLO ausführen oder Dummy verwenden
+                if USE_DUMMY:
+                    results = None  # Keine Ergebnisse im Dummy-Modus
+                else:
+                    results = model(img_path)
 
                 # Koordinaten extrahieren (XY relativ zur Kamera)
                 coords = extract_xy(results)
