@@ -1,3 +1,6 @@
+# Start in Powershell!
+# C:\Users\johan\OneDrive\Documents\KI-Projekte\Roboter\unkrautroboter_bilderkennung>  python3 joystick_steuerung.py
+
 import pygame
 import socket
 import time
