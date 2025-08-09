@@ -3,6 +3,7 @@ Modul für die serielle Kommunikation des Unkrautroboters.
 """
 
 import serial
+import serial.tools.list_ports
 import time
 import threading
 import queue
@@ -15,11 +16,45 @@ class SerialManager:
         else:
             self.port = config.SERIAL_PORT
             
-        self.serial = serial.Serial(
-            port=self.port,
-            baudrate=config.BAUDRATE,
-            timeout=1
-        )
+        # Warte auf serielle Schnittstelle
+        while True:
+            try:
+                # Prüfe ob Port verfügbar ist
+                import glob
+                
+                # Suche nach allen seriellen Ports (hardware und pts)
+                hardware_ports = list(serial.tools.list_ports.comports())
+                pts_ports = glob.glob('/dev/pts/[0-9]*')
+                
+                print("\nVerfügbare Hardware-Ports:")
+                for port in hardware_ports:
+                    print(f"  - {port.device}: {port.description}")
+                    
+                print("\nVerfügbare PTS-Ports:")
+                for port in pts_ports:
+                    print(f"  - {port}")
+                
+                # Kombiniere alle gefundenen Ports
+                all_ports = [p.device for p in hardware_ports] + pts_ports
+                
+                if self.port not in all_ports:
+                    print(f"\nWarte auf Port {self.port}...")
+                    time.sleep(2)
+                    continue
+                    
+                self.serial = serial.Serial(
+                    port=self.port,
+                    baudrate=config.BAUDRATE,
+                    timeout=1
+                )
+                break
+                
+            except serial.SerialException as e:
+                print(f"Port nicht verfügbar: {str(e)}")
+                time.sleep(2)
+                
+        print(f"Serielle Verbindung hergestellt auf {self.port}")
+        
         self.buffer = ""  # Puffer für eingehende Zeichen
         self.received_lines = queue.Queue()  # Thread-sichere Queue für empfangene Zeilen
         self.running = True
@@ -29,7 +64,6 @@ class SerialManager:
         self.read_thread.start()
         
         time.sleep(2)  # Zeit für Verbindungsaufbau
-        print(f"Serielle Verbindung hergestellt auf {self.port}")
 
     def _read_serial(self):
         """Thread-Funktion zum kontinuierlichen Lesen der seriellen Schnittstelle."""
