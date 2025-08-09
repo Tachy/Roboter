@@ -44,8 +44,15 @@
 
             try {
                 // Erstelle einen UDP-Socket
+                alert("test");
+                
                 const socket = new DatagramSocket();
+
+                alert("test");
+                
                 const message = new TextEncoder().encode(mode);
+
+                alert("test");
 
                 // Sende den Modus über UDP
                 socket.send(message, 0, message.length, udpPort, udpHost, () => {
