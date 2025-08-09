@@ -31,6 +31,7 @@ if not USE_DUMMY:
 # Globale Variablen
 mode = "AUTO"  # AUTO oder MANUAL
 lock = threading.Lock()
+stream_active = False  # Status des Streams
 
 # Serielle Verbindung
 if USE_SIMULATED_SERIAL:
@@ -89,11 +90,17 @@ class MJPEGOutput(io.BufferedIOBase):
             return self.frame if self.frame else b""
 
 out = MJPEGOutput()
-picam2.start_recording(MJPEGEncoder(), FileOutput(out))
 
 # HTTP-Handler für Livestream
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        global stream_active
+        if not stream_active:
+            self.send_response(503)
+            self.end_headers()
+            self.wfile.write(b"Stream ist deaktiviert.")
+            return
+
         if self.path == '/stream':
             self.send_response(200)
             self.send_header('Age', '0')
@@ -102,7 +109,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=FRAME')
             self.end_headers()
             try:
-                while True:
+                while stream_active:
                     with out.lock:
                         frame = out.frame
                     if frame:
@@ -119,6 +126,19 @@ def start_http_server():
     print("HTTP-Server läuft auf Port 8080...")
     server.serve_forever()
 
+# Funktion, um den Stream zu starten oder zu stoppen
+def update_stream_status():
+    global stream_active
+    with lock:
+        if mode == "MANUAL" and not stream_active:
+            picam2.start_recording(MJPEGEncoder(), FileOutput(out))
+            stream_active = True
+            print("Stream aktiviert.")
+        elif mode == "AUTO" and stream_active:
+            picam2.stop_recording()
+            stream_active = False
+            print("Stream deaktiviert.")
+
 # UDP-Steuerkanal für Modusumschaltung
 def udp_control_server():
     global mode
@@ -132,6 +152,7 @@ def udp_control_server():
             with lock:
                 mode = command
             print(f"Modus auf {mode} geändert (von {addr})")
+            update_stream_status()
         else:
             print(f"Unbekannter Befehl: {command} (von {addr})")
 
@@ -202,6 +223,8 @@ def extract_xy(results):
 def main_loop():
     global mode
     while True:
+        time.sleep(0.1)  # CPU-Entlastung
+
         with lock:
             current_mode = mode
         if current_mode == "AUTO" and ser.in_waiting:
@@ -234,8 +257,8 @@ def main_loop():
                 ser.write(b"DONE\n")
                 print("Sende: DONE")
         elif current_mode == "MANUAL":
-            time.sleep(0.1)  # CPU-Entlastung
-
+            continue
+        
 # Start
 try:
     print("Starte HTTP-Server...")
@@ -250,4 +273,5 @@ except KeyboardInterrupt:
     print("Beendet.")
 finally:
     ser.close()
-    picam2.stop_recording()
+    if stream_active:
+        picam2.stop_recording()
