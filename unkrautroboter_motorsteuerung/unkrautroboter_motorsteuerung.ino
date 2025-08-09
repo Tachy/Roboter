@@ -355,52 +355,120 @@ void anfrageUndAbarbeiten() {
   }
 }
 
+// Maximale Länge für einen Befehl
+#define MAX_CMD_LENGTH 50
+
 void processSerialCommand() {
   static String cmdBuffer = "";
+  static bool lineComplete = false;
   
-  while (Serial1.available()) {
+  while (Serial1.available() && !lineComplete) {
     char c = Serial1.read();
-    cmdBuffer += c;
     
-    // Prüfe auf bekannte Befehle
-    if (cmdBuffer == "START") {
-      if (currentMode == WAITING_FOR_START) {
-        currentMode = MANUAL;  // Nach START in MANUAL-Modus wechseln
-        Serial.println("START empfangen - Wechsel zu MANUAL Modus");
-      }
-      cmdBuffer = "";  // Buffer zurücksetzen
+    // Zeile vollständig wenn \n empfangen
+    if (c == '\n') {
+      lineComplete = true;
+    }
+    // Ignoriere CR
+    else if (c == '\r') {
+      continue;
+    }
+    // Füge Zeichen zum Buffer hinzu wenn noch Platz
+    else if (cmdBuffer.length() < MAX_CMD_LENGTH) {
+      cmdBuffer += c;
+    }
+    
+    // Buffer-Überlauf: Verwerfe alles bis zum nächsten Zeilenende
+    if (cmdBuffer.length() >= MAX_CMD_LENGTH && !lineComplete) {
+      cmdBuffer = "";
+      while (Serial1.available() && Serial1.read() != '\n');
       return;
     }
+  }
+  
+  // Verarbeite nur vollständige Zeilen
+  if (lineComplete) {
+    // Debug-Ausgabe
+    Serial.print("Empfangener Befehl: ");
+    Serial.println(cmdBuffer);
     
-    // Normale Befehlsverarbeitung nach dem Start
-    if (cmdBuffer == "MODE:AUTO") {
+    // Befehl auswerten basierend auf Keywords (indexOf >= 0 bedeutet "gefunden")
+    if (cmdBuffer.indexOf("START") >= 0) {
+      if (currentMode == WAITING_FOR_START) {
+        currentMode = MANUAL;
+        Serial.println("START empfangen - Wechsel zu MANUAL Modus");
+      }
+    }
+    
+    if (cmdBuffer.indexOf("MODE:AUTO") >= 0) {
       currentMode = AUTO;
       Serial.println("Modus gewechselt zu AUTO");
-      cmdBuffer = "";
-    } 
-    else if (cmdBuffer == "MODE:MANUAL") {
+    }
+    else if (cmdBuffer.indexOf("MODE:MANUAL") >= 0) {
       currentMode = MANUAL;
       Serial.println("Modus gewechselt zu MANUAL");
-      cmdBuffer = "";
-    }
-    else if (cmdBuffer == "GETXY") {
-      processManualCommand("GETXY");
-      cmdBuffer = "";
     }
     
-    // Buffer zurücksetzen wenn er zu lang wird
-    if (cmdBuffer.length() > 20) {
-      cmdBuffer = "";
+    // Format: JOYSTICK:X=-48,Y=-54
+    if (cmdBuffer.indexOf("JOYSTICK:") >= 0 && currentMode == MANUAL) {
+      int xStart = cmdBuffer.indexOf("X=");
+      int xEnd = cmdBuffer.indexOf(",Y=");
+      int yEnd = cmdBuffer.length();
+      
+      if (xStart >= 0 && xEnd >= 0 && xEnd > xStart) {
+        int x = cmdBuffer.substring(xStart + 2, xEnd).toInt();
+        int y = cmdBuffer.substring(xEnd + 3).toInt();
+        
+        // Prüfe Wertebereich
+        if (x >= -100 && x <= 100 && y >= -100 && y <= 100) {
+          processJoystickCommand(x, y);
+        }
+      }
     }
+    
+    // Buffer und Status zurücksetzen
+    cmdBuffer = "";
+    lineComplete = false;
   }
 }
 
-void processManualCommand(String cmd) {
-  // Hier können Sie spezifische manuelle Kommandos verarbeiten
-  if (cmd == "START") {
-    anfrageUndAbarbeiten();
+void processJoystickCommand(int x, int y) {
+  // Debug-Ausgabe
+  Serial.print("Joystick: X=");
+  Serial.print(x);
+  Serial.print(" Y=");
+  Serial.println(y);
+  
+  // TODO: Hier die Motorsteuerung basierend auf x und y implementieren
+  // x: links/rechts (-100 bis +100)
+  // y: vorwärts/rückwärts (-100 bis +100)
+  
+  // Beispiel für die Motoransteuerung (muss angepasst werden):
+  /*
+  int pwmLeft = map(y + x, -200, 200, -255, 255);   // y+x für links
+  int pwmRight = map(y - x, -200, 200, -255, 255);  // y-x für rechts
+  
+  pwmLeft = constrain(pwmLeft, -255, 255);
+  pwmRight = constrain(pwmRight, -255, 255);
+  
+  // Links
+  if (pwmLeft > 0) {
+    analogWrite(RPWM_L, pwmLeft);
+    analogWrite(LPWM_L, 0);
+  } else {
+    analogWrite(RPWM_L, 0);
+    analogWrite(LPWM_L, -pwmLeft);
   }
-  // Weitere manuelle Kommandos hier hinzufügen
+  
+  // Rechts
+  if (pwmRight > 0) {
+    analogWrite(RPWM_R, pwmRight);
+    analogWrite(LPWM_R, 0);
+  } else {
+    analogWrite(RPWM_R, 0);
+    analogWrite(LPWM_R, -pwmRight);
+  }
+  */
 }
 
 void loop() {
