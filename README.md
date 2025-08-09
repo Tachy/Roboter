@@ -10,4 +10,4 @@ Entwurf Elektronik: Fritzing
 
 Energiemanagement: Arduino Pro Mini 5V
 Motorsteuerung: Arduino MEGA
-Bilderkennung mit KI: Raspberry Pi 4B
+Bilderkennung mit KI: Raspberry Pi 4B mit RaspBerry HQ Kamera
