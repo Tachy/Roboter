@@ -79,13 +79,6 @@ def get_cpu_temperature():
     except FileNotFoundError:
         return "N/A"
 
-# Kamera-Setup
-picam2 = Picamera2()
-picam2.configure(picam2.create_video_configuration(main={"size": config.CAMERA_RESOLUTION}))
-picam2.start()  # Kamera grundsätzlich starten
-stream_output = MJPEGOutput()
-stream_active = False
-
 def start_stream():
     """Startet den Video-Stream."""
     global stream_active
@@ -163,3 +156,11 @@ def start_http_server():
     server = HTTPServer(('', config.HTTP_PORT), StreamHandler)
     print(f"HTTP-Server läuft auf Port {config.HTTP_PORT}...")
     server.serve_forever()
+
+# Kamera-Setup
+picam2 = Picamera2()
+picam2.configure(picam2.create_video_configuration(main={"size": config.CAMERA_RESOLUTION}))
+picam2.start()  # Kamera grundsätzlich starten
+stream_output = MJPEGOutput()
+stream_active = False
+

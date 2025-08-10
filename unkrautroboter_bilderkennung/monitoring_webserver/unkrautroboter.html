@@ -68,84 +68,33 @@
             }
         }
 
-        // Heartbeat-Logik: alle 2 Sekunden Heartbeat senden, solange Seite offen
-        let heartbeatInterval = null;
-        function startHeartbeat() {
-            if (heartbeatInterval) return;
-            heartbeatInterval = setInterval(() => {
-                fetch('send_udp.php?heartbeat=1').catch(() => {});
-            }, 2000);
-        }
-        function stopHeartbeat() {
-            if (heartbeatInterval) {
-                clearInterval(heartbeatInterval);
-                heartbeatInterval = null;
-            }
-        }
-        window.addEventListener('load', startHeartbeat);
-        window.addEventListener('beforeunload', stopHeartbeat);
-
-        // Stream-Check: Versuche sekündlich das Stream-Image neu zu laden, bis es funktioniert
-        let streamCheckInterval = null;
-        function startStreamCheck() {
+        // Robuster Stream- und Hang-Check mit rekursivem Timeout (funktioniert auch bei Tab-Wechsel)
+        let lastFrameTime = 0;
+        function reloadStreamImg() {
             const img = document.getElementById('stream-img');
-            const placeholder = document.getElementById('stream-placeholder');
             if (!img) return;
-            let loadedOnce = false;
-
-            function tryLoad() {
-                if (loadedOnce) return;
-                img.src = `http://192.168.179.252:8080/stream?ts=${Date.now()}`;
-                placeholder.style.display = 'none'; // Verstecke den Platzhalter, wenn der Ladeversuch gestartet wird
-            }
-
             img.onload = function() {
-                loadedOnce = true;
                 lastFrameTime = Date.now();
-                if (streamCheckInterval) {
-                    clearInterval(streamCheckInterval);
-                    streamCheckInterval = null;
-                }
-                // Platzhalter ausblenden
                 document.getElementById('stream-placeholder').style.display = 'none';
-                startStreamHangCheck();
+                setTimeout(reloadStreamImg, 1000); // nächster Versuch nach 1s
             };
             img.onerror = function() {
-                // Platzhalter anzeigen
-                document.getElementById('stream-placeholder').style.display = 'flex';
-                // Fehler ignorieren, Timer sorgt für Reload
-            };
-
-            streamCheckInterval = setInterval(tryLoad, 1000);
-            tryLoad();
-        }
-        window.addEventListener('load', startStreamCheck);
-
-        // Erweiterung: Erkenne, ob der Stream hängt (keine neuen Bilder)
-        let lastFrameTime = 0;
-        let streamHangCheckInterval = null;
-        function startStreamHangCheck() {
-            if (streamHangCheckInterval) return;
-            streamHangCheckInterval = setInterval(() => {
+                // Wenn seit 3s kein Frame, Platzhalter anzeigen
                 if (Date.now() - lastFrameTime > 3000) {
-                    // Stream hängt, Platzhalter anzeigen und Bild neu laden
                     document.getElementById('stream-placeholder').style.display = 'flex';
-                    const img = document.getElementById('stream-img');
-                    img.src = `http://192.168.179.252:8080/stream?ts=${Date.now()}`;
                 }
-            }, 2000);
+                setTimeout(reloadStreamImg, 1000); // nächster Versuch nach 1s
+            };
+            img.src = `http://192.168.179.252:8080/stream?ts=${Date.now()}`;
         }
-        function stopStreamHangCheck() {
-            if (streamHangCheckInterval) {
-                clearInterval(streamHangCheckInterval);
-                streamHangCheckInterval = null;
-            }
-        }
+        window.addEventListener('load', reloadStreamImg);
 
-        // Aktualisiere lastFrameTime bei jedem erfolgreichen Bildladen
-        document.getElementById('stream-img').onload = () => {
-            lastFrameTime = Date.now();
-        };
+        // Heartbeat-Logik: alle 2 Sekunden Heartbeat senden, solange Seite offen (auch mit Timeout)
+        function sendHeartbeat() {
+            fetch('send_udp.php?heartbeat=1').catch(() => {});
+            setTimeout(sendHeartbeat, 2000);
+        }
+        window.addEventListener('load', sendHeartbeat);
     </script>
 </head>
 <body>
