@@ -4,8 +4,7 @@ Enthält alle wichtigen Konstanten und Einstellungen.
 """
 
 # Serial Setup
-USE_SIMULATED_SERIAL = True  # Auf True setzen, um die lokale Simulation zu aktivieren
-SIMULATED_SERIAL_PORT = '/dev/pts/2'  # Virtueller Port für die Simulation
+SIMULATED_SERIAL_PORT = '/tmp/ttyV8'  # Virtueller Port für die Simulation
 SERIAL_PORT = '/dev/serial0'  # Echter serieller Port
 BAUDRATE = 115200
 
