@@ -53,12 +53,57 @@
                 console.error(`Fehler beim Senden des Modus: ${error.message}`);
             }
         }
+
+        // Heartbeat-Logik: alle 2 Sekunden Heartbeat senden, solange Seite offen
+        let heartbeatInterval = null;
+        function startHeartbeat() {
+            if (heartbeatInterval) return;
+            heartbeatInterval = setInterval(() => {
+                fetch('send_udp.php?heartbeat=1').catch(() => {});
+            }, 2000);
+        }
+        function stopHeartbeat() {
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
+        }
+        window.addEventListener('load', startHeartbeat);
+        window.addEventListener('beforeunload', stopHeartbeat);
+
+        // Stream-Check: Versuche sekündlich das Stream-Image neu zu laden, bis es funktioniert
+        let streamCheckInterval = null;
+        function startStreamCheck() {
+            const img = document.getElementById('stream-img');
+            if (!img) return;
+            let loadedOnce = false;
+
+            function tryLoad() {
+                if (loadedOnce) return;
+                img.src = `http://192.168.179.252:8080/stream?ts=${Date.now()}`;
+            }
+
+            img.onload = function() {
+                loadedOnce = true;
+                if (streamCheckInterval) {
+                    clearInterval(streamCheckInterval);
+                    streamCheckInterval = null;
+                }
+            };
+            img.onerror = function() {
+                // Fehler ignorieren, Timer sorgt für Reload
+            };
+
+            streamCheckInterval = setInterval(tryLoad, 1000);
+            tryLoad();
+        }
+        window.addEventListener('load', startStreamCheck);
     </script>
 </head>
 <body>
     <div id="video-container">
         <h2>Live MJPEG Stream</h2>
-        <img src="http://192.168.179.252:8080/stream" alt="MJPEG Stream">
+        <img id="stream-img" src="" alt="MJPEG Stream">
         <div id="mode-selector">
             <label for="mode">Modus wechseln:</label>
             <select id="mode" onchange="changeMode()">

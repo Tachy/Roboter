@@ -82,6 +82,9 @@ class RobotControl:
             print("Starte UDP-Joystick-Server...")
             threading.Thread(target=udp_server.start_joystick_server, daemon=True).start()
             
+            # Starte Heartbeat-Listener für Videostream (UDP)
+            udp_server.start_heartbeat_monitor()
+            
             print("Starte Hauptloop...")
             while True:
                 if self.get_mode() == "AUTO":

@@ -49,7 +49,8 @@ class StreamHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"Stream ist deaktiviert.")
             return
 
-        if self.path == '/stream':
+        # Erlaube auch /stream?irgendwas
+        if self.path.startswith('/stream'):
             self.send_response(200)
             self.send_header('Age', '0')
             self.send_header('Cache-Control', 'no-cache, private')
