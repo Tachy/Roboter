@@ -35,6 +35,20 @@
             border-radius: 5px;
             border: 1px solid #ccc;
         }
+        #stream-placeholder {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 1280px;
+            height: 720px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 2em;
+            background: #222;
+            z-index: 2;
+        }
     </style>
     <script>
         async function changeMode() {
@@ -75,22 +89,30 @@
         let streamCheckInterval = null;
         function startStreamCheck() {
             const img = document.getElementById('stream-img');
+            const placeholder = document.getElementById('stream-placeholder');
             if (!img) return;
             let loadedOnce = false;
 
             function tryLoad() {
                 if (loadedOnce) return;
                 img.src = `http://192.168.179.252:8080/stream?ts=${Date.now()}`;
+                placeholder.style.display = 'none'; // Verstecke den Platzhalter, wenn der Ladeversuch gestartet wird
             }
 
             img.onload = function() {
                 loadedOnce = true;
+                lastFrameTime = Date.now();
                 if (streamCheckInterval) {
                     clearInterval(streamCheckInterval);
                     streamCheckInterval = null;
                 }
+                // Platzhalter ausblenden
+                document.getElementById('stream-placeholder').style.display = 'none';
+                startStreamHangCheck();
             };
             img.onerror = function() {
+                // Platzhalter anzeigen
+                document.getElementById('stream-placeholder').style.display = 'flex';
                 // Fehler ignorieren, Timer sorgt für Reload
             };
 
@@ -98,12 +120,41 @@
             tryLoad();
         }
         window.addEventListener('load', startStreamCheck);
+
+        // Erweiterung: Erkenne, ob der Stream hängt (keine neuen Bilder)
+        let lastFrameTime = 0;
+        let streamHangCheckInterval = null;
+        function startStreamHangCheck() {
+            if (streamHangCheckInterval) return;
+            streamHangCheckInterval = setInterval(() => {
+                if (Date.now() - lastFrameTime > 3000) {
+                    // Stream hängt, Platzhalter anzeigen und Bild neu laden
+                    document.getElementById('stream-placeholder').style.display = 'flex';
+                    const img = document.getElementById('stream-img');
+                    img.src = `http://192.168.179.252:8080/stream?ts=${Date.now()}`;
+                }
+            }, 2000);
+        }
+        function stopStreamHangCheck() {
+            if (streamHangCheckInterval) {
+                clearInterval(streamHangCheckInterval);
+                streamHangCheckInterval = null;
+            }
+        }
+
+        // Aktualisiere lastFrameTime bei jedem erfolgreichen Bildladen
+        document.getElementById('stream-img').onload = () => {
+            lastFrameTime = Date.now();
+        };
     </script>
 </head>
 <body>
     <div id="video-container">
         <h2>Live MJPEG Stream</h2>
-        <img id="stream-img" src="" alt="MJPEG Stream">
+        <div style="position: relative; display: inline-block;">
+            <img id="stream-img" src="" alt="MJPEG Stream" style="background: #222; width: 1280px; height: 720px; display: block;">
+            <div id="stream-placeholder" style="position: absolute; left: 0; top: 0; width: 1280px; height: 720px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 2em; background: #222; z-index: 2;">Stream nicht verfügbar</div>
+        </div>
         <div id="mode-selector">
             <label for="mode">Modus wechseln:</label>
             <select id="mode" onchange="changeMode()">
