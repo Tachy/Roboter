@@ -38,19 +38,27 @@ def get_status_data():
             uptime_str = '-'
     except Exception:
         uptime_str = '-'
-    return {
+    status = {
         "mode": robot_control.robot.get_mode() if hasattr(robot_control, 'robot') else None,
         "stream": camera.is_streaming(),
         "cpu_temp": camera.get_cpu_temperature(),
         "time": now,
         "uptime": uptime_str
     }
+    # Joystick-Daten nur im Modus MANUAL mitsenden
+    if status["mode"] == "MANUAL":
+        if hasattr(robot_control.robot, "get_joystick_status"):
+            joy = robot_control.robot.get_joystick_status()
+            status["joystick"] = joy
+        else:
+            status["joystick"] = {"x": 0, "y": 0}
+    return status
 
 async def status_broadcast(websocket):
     try:
         while True:
             status = get_status_data()
-            #print(f"[WebSocket-Status] Sende: {status}")
+            print(f"[WebSocket-Status] Sende: {status}")
             await websocket.send(json.dumps(status))
             await asyncio.sleep(1)
     except ConnectionClosedOK:

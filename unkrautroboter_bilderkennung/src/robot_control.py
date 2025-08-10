@@ -11,6 +11,8 @@ class RobotControl:
         self.mode = "AUTO"
         self.mode_lock = threading.Lock()
         self.serial = serial_manager.SerialManager()
+        self.last_joystick = {"x": 0, "y": 0}
+        self.last_joystick_lock = threading.Lock()
         msg = "START"
         print("-> Arduino:", msg)
         self.send_command(msg)
@@ -59,12 +61,31 @@ class RobotControl:
 
     def handle_command(self, command):
         """Verarbeitet ein empfangenes Kommando."""
+        # Extrahiere Joystick-Daten
+        if command.startswith("JOYSTICK:"):
+            try:
+                parts = command[len("JOYSTICK:"):].split(",")
+                x = y = None
+                for p in parts:
+                    if p.startswith("X="):
+                        x = int(p[2:])
+                    elif p.startswith("Y="):
+                        y = int(p[2:])
+                if x is not None and y is not None:
+                    with self.last_joystick_lock:
+                        self.last_joystick = {"x": x, "y": y}
+            except Exception:
+                pass
         if self.get_mode() == "MANUAL":
             if ",BUTTON:1" in command:
                 command = command.replace(",BUTTON:1", "")
             self.send_command(command)
             return True
         return False
+
+    def get_joystick_status(self):
+        with self.last_joystick_lock:
+            return dict(self.last_joystick)
 
     def run(self):
         """Hauptschleife der Robotersteuerung."""

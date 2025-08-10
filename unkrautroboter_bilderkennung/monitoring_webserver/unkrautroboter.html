@@ -181,12 +181,16 @@
             el.textContent = 'Keine Statusdaten verfügbar.';
             return;
         }
-    let html = '';
-    html += `Modus: <b>${data.mode ?? '-'}</b><br>`;
-    html += `Stream: <b>${data.stream ? 'aktiv' : 'inaktiv'}</b><br>`;
-    html += `CPU-Temp: <b>${typeof data.cpu_temp === 'number' ? data.cpu_temp.toFixed(1) + '°C' : (data.cpu_temp ?? '-')}</b><br>`;
-    html += `Zeit: <b>${data.time ?? '-'}</b><br>`;
-    html += `Uptime: <b>${data.uptime ?? '-'}</b>`;
+        let html = '';
+        html += `Modus: <b>${data.mode ?? '-'}</b><br>`;
+        html += `Stream: <b>${data.stream ? 'aktiv' : 'inaktiv'}</b><br>`;
+        html += `CPU-Temp: <b>${typeof data.cpu_temp === 'number' ? data.cpu_temp.toFixed(1) + '°C' : (data.cpu_temp ?? '-')}</b><br>`;
+        html += `Zeit: <b>${data.time ?? '-'}</b><br>`;
+        html += `Uptime: <b>${data.uptime ?? '-'}</b>`;
+        // Joystick nur im Modus MANUAL anzeigen
+        if (data.mode === 'MANUAL' && data.joystick && typeof data.joystick.x === 'number' && typeof data.joystick.y === 'number') {
+            html += `<br>Joystick X: <b>${data.joystick.x}</b> &nbsp; Y: <b>${data.joystick.y}</b>`;
+        }
         el.innerHTML = html;
     }
 
@@ -200,6 +204,7 @@
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
+                // console.log('[WS-Status empfangen]', data);
                 updateStatusBox(data);
             } catch (e) {
                 updateStatusBox(null);
