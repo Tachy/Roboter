@@ -10,6 +10,32 @@ WS_STATUS_PORT = 8765  # WebSocket-Port für Statusdaten
 
 # Funktion zum Sammeln der Statusdaten (wie im udp_server)
 def get_status_data():
+    # CPU-Last berechnen (Prozent, 1 Sekunde Mittelwert)
+    def get_cpu_load():
+        try:
+            with open("/proc/stat", "r") as f:
+                line = f.readline()
+            parts = line.split()
+            if parts[0] != "cpu":
+                return None
+            total_1 = sum(map(int, parts[1:]))
+            idle_1 = int(parts[4])
+            import time
+            time.sleep(0.2)
+            with open("/proc/stat", "r") as f:
+                line = f.readline()
+            parts = line.split()
+            total_2 = sum(map(int, parts[1:]))
+            idle_2 = int(parts[4])
+            total_diff = total_2 - total_1
+            idle_diff = idle_2 - idle_1
+            if total_diff == 0:
+                return None
+            usage = 100.0 * (total_diff - idle_diff) / total_diff
+            return round(usage, 1)
+        except Exception:
+            return None
+
     # Aktuelle Uhrzeit im ISO-Format
     now = datetime.datetime.now().isoformat(sep=' ', timespec='seconds')
     # Uptime des robot.service (systemd)
@@ -38,10 +64,21 @@ def get_status_data():
             uptime_str = '-'
     except Exception:
         uptime_str = '-'
+    # CPU-Frequenz auslesen (MHz)
+    try:
+        with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "r") as f:
+            freq_khz = int(f.read().strip())
+            cpu_freq = round(freq_khz / 1000)  # MHz
+    except Exception:
+        cpu_freq = None
+
+    cpu_load = get_cpu_load()
     status = {
         "mode": robot_control.robot.get_mode() if hasattr(robot_control, 'robot') else None,
         "stream": camera.is_streaming(),
         "cpu_temp": camera.get_cpu_temperature(),
+        "cpu_freq": cpu_freq,
+        "cpu_load": cpu_load,
         "time": now,
         "uptime": uptime_str
     }
