@@ -15,6 +15,10 @@ on_command = None
 _last_heartbeat = 0
 _stream_running = False
 
+
+
+# Funktion zum Sammeln der Statusdaten
+
 def start_control_server():
     """Startet den UDP-Server für die Modussteuerung."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -89,3 +93,5 @@ def start_heartbeat_monitor():
     _stream_running = False
     threading.Thread(target=_heartbeat_listener, daemon=True).start()
     threading.Thread(target=_stream_watchdog, daemon=True).start()
+
+

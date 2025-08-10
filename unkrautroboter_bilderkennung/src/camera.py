@@ -5,7 +5,7 @@ Modul für die Kamera- und Stream-Funktionalität des Unkrautroboters.
 import io
 import threading
 import time
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from picamera2 import Picamera2 # type: ignore
 from picamera2.encoders import MJPEGEncoder # type: ignore
 from picamera2.outputs import FileOutput # type: ignore
@@ -19,23 +19,8 @@ class MJPEGOutput(io.BufferedIOBase):
 
     def write(self, buf):
         with self.lock:
-            image = Image.open(io.BytesIO(buf))
-            draw = ImageDraw.Draw(image)
-
-            # Text hinzufügen: CPU-Temperatur
-            cpu_temp = get_cpu_temperature()
-            text_temp = f"CPU: {cpu_temp}"
-            font = ImageFont.load_default()
-            draw.text((10, 10), text_temp, font=font, fill="white")
-
-            # Text hinzufügen: Aktueller Modus
-            from . import robot_control  # Vermeidet zirkuläre Importe
-            text_mode = f"Modus: {robot_control.robot.get_mode()}"
-            draw.text((10, 30), text_mode, font=font, fill="white")
-
-            output = io.BytesIO()
-            image.save(output, format="JPEG")
-            self.frame = output.getvalue()
+            # Direktes Durchreichen des JPEG-Bildes ohne Overlay
+            self.frame = buf
 
     def read(self, size=-1):
         with self.lock:

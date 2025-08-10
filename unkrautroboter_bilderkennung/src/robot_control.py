@@ -4,7 +4,7 @@ Hauptmodul für die Robotersteuerung.
 
 import threading
 import time
-from . import config, camera, serial_manager, yolo_detector, udp_server
+from . import config, camera, serial_manager, yolo_detector, udp_server, status_ws_server
 
 class RobotControl:
     def __init__(self):
@@ -84,6 +84,8 @@ class RobotControl:
             
             # Starte Heartbeat-Listener für Videostream (UDP)
             udp_server.start_heartbeat_monitor()
+            # Starte WebSocket-Status-Server (im Hintergrund)
+            threading.Thread(target=status_ws_server.start_status_ws_server, daemon=True).start()
             
             print("Starte Hauptloop...")
             while True:

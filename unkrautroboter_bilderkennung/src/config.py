@@ -13,6 +13,7 @@ UDP_IP = "0.0.0.0"  # Hört auf alle Schnittstellen
 UDP_CONTROL_PORT = 5005  # Port für Modusumschaltung
 UDP_JOYSTICK_PORT = 5006  # Port für Joystick-Kommandos
 UDP_HEARTBEAT_PORT = 5007  # Port für Heartbeat-Messages
+UDP_STATUS_BROADCAST_PORT = 5008  # Port für Status-Broadcast
 HEARTBEAT_TIMEOUT = 5.0    # Sekunden, wie lange der Stream nach letztem Heartbeat läuft
 
 # HTTP Server Setup

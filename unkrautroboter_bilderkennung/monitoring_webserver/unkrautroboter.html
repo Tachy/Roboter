@@ -9,31 +9,89 @@
             font-family: Arial, sans-serif;
             display: flex;
             flex-direction: column;
-            justify-content: center;
+            justify-content: flex-start;
             align-items: center;
-            height: 100vh;
+            min-height: 100vh;
             margin: 0;
-            background-color: #f0f0f0;
+            background-color: #000;
+            padding: 30px 30px 30px 30px;
+        }
+        #main-layout {
+            display: flex;
+            flex-direction: row;
+            align-items: flex-start;
+            gap: 40px;
+            width: 100%;
+            max-width: 1400px;
+            margin: 0;
+        }
+        @media (max-width: 1400px) {
+            #main-layout {
+                max-width: 100vw;
+            }
+        }
+        @media (max-width: 1100px) {
+            #main-layout {
+                flex-direction: column;
+                align-items: center;
+                gap: 20px;
+            }
+            #video-container, #mode-selector {
+                width: 100%;
+                max-width: 98vw;
+            }
         }
         #video-container {
-            background-color: black;
-            padding: 20px;
+            background: #181818;
             border-radius: 10px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            padding: 30px 20px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            color: #fff;
+            min-width: 180px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            margin: 0;
+            flex: 1 1 0;
+            min-width: 0;
             text-align: center;
         }
+        .stream-wrapper {
+            width: 100%;
+            max-width: 1280px;
+            margin: 0 auto;
+            position: relative;
+        }
         img {
-            width: 1280px;
-            height: 720px;
+            width: 100%;
+            max-width: 1280px;
+            height: auto;
+            aspect-ratio: 16/9;
+            display: block;
         }
         #mode-selector {
-            margin-top: 20px;
+            background: #181818;
+            border-radius: 10px;
+            padding: 30px 20px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            color: #fff;
+            min-width: 180px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            margin: 0;
+        }
+        #mode-selector label {
+            font-size: 1.2em;
+            margin-bottom: 10px;
         }
         select {
             padding: 10px;
             font-size: 16px;
             border-radius: 5px;
             border: 1px solid #ccc;
+            background: #222;
+            color: #fff;
         }
         #stream-placeholder {
             position: absolute;
@@ -50,67 +108,113 @@
             z-index: 2;
         }
     </style>
-    <script>
-        async function changeMode() {
-            const mode = document.getElementById("mode").value;
-
-            // Sende den Modus an das PHP-Skript
-            try {
-                await fetch("send_udp.php", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/x-www-form-urlencoded",
-                    },
-                    body: `mode=${mode}`,
-                });
-            } catch (error) {
-                console.error(`Fehler beim Senden des Modus: ${error.message}`);
-            }
-        }
-
-        // Robuster Stream- und Hang-Check mit rekursivem Timeout (funktioniert auch bei Tab-Wechsel)
-        let lastFrameTime = 0;
-        function reloadStreamImg() {
-            const img = document.getElementById('stream-img');
-            if (!img) return;
-            img.onload = function() {
-                lastFrameTime = Date.now();
-                document.getElementById('stream-placeholder').style.display = 'none';
-                setTimeout(reloadStreamImg, 1000); // nächster Versuch nach 1s
-            };
-            img.onerror = function() {
-                // Wenn seit 3s kein Frame, Platzhalter anzeigen
-                if (Date.now() - lastFrameTime > 3000) {
-                    document.getElementById('stream-placeholder').style.display = 'flex';
-                }
-                setTimeout(reloadStreamImg, 1000); // nächster Versuch nach 1s
-            };
-            img.src = `http://192.168.179.252:8080/stream?ts=${Date.now()}`;
-        }
-        window.addEventListener('load', reloadStreamImg);
-
-        // Heartbeat-Logik: alle 2 Sekunden Heartbeat senden, solange Seite offen (auch mit Timeout)
-        function sendHeartbeat() {
-            fetch('send_udp.php?heartbeat=1').catch(() => {});
-            setTimeout(sendHeartbeat, 2000);
-        }
-        window.addEventListener('load', sendHeartbeat);
-    </script>
 </head>
 <body>
-    <div id="video-container">
-        <h2>Live MJPEG Stream</h2>
-        <div style="position: relative; display: inline-block;">
-            <img id="stream-img" src="" alt="MJPEG Stream" style="background: #222; width: 1280px; height: 720px; display: block;">
-            <div id="stream-placeholder" style="position: absolute; left: 0; top: 0; width: 1280px; height: 720px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 2em; background: #222; z-index: 2;">Stream nicht verfügbar</div>
-        </div>
+    <div id="main-layout">
         <div id="mode-selector">
             <label for="mode">Modus wechseln:</label>
             <select id="mode" onchange="changeMode()">
                 <option value="AUTO">AUTO</option>
                 <option value="MANUAL">MANUAL</option>
             </select>
+            <div id="status-box" style="margin-top:24px; width:100%; background:#222; border-radius:8px; padding:16px 12px; color:#fff; font-size:1em; min-height:70px;">
+                <b>Status:</b><br>
+                <span id="status-content">Warte auf Statusdaten ...</span>
+            </div>
+        </div>
+        <div id="video-container">
+            <h2>Harry Botter live</h2>
+            <div class="stream-wrapper">
+                <img id="stream-img" src="" alt="MJPEG Stream" style="background: #222;">
+                <div id="stream-placeholder" style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 2em; background: #222; z-index: 2;">Stream nicht verfügbar</div>
+            </div>
         </div>
     </div>
+    <script>
+    async function changeMode() {
+        const mode = document.getElementById("mode").value;
+        try {
+            await fetch("send_udp.php", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                body: `mode=${mode}`,
+            });
+        } catch (error) {
+            console.error(`Fehler beim Senden des Modus: ${error.message}`);
+        }
+    }
+
+    // Robuster Stream- und Hang-Check mit rekursivem Timeout (funktioniert auch bei Tab-Wechsel)
+    let lastFrameTime = 0;
+    function reloadStreamImg() {
+        const img = document.getElementById('stream-img');
+        if (!img) return;
+        img.onload = function() {
+            lastFrameTime = Date.now();
+            document.getElementById('stream-placeholder').style.display = 'none';
+            setTimeout(reloadStreamImg, 1000);
+        };
+        img.onerror = function() {
+            if (Date.now() - lastFrameTime > 3000) {
+                document.getElementById('stream-placeholder').style.display = 'flex';
+            }
+            setTimeout(reloadStreamImg, 1000);
+        };
+        img.src = `http://192.168.179.252:8080/stream?ts=${Date.now()}`;
+    }
+    window.addEventListener('load', reloadStreamImg);
+
+    // Heartbeat-Logik: alle 2 Sekunden Heartbeat senden, solange Seite offen (auch mit Timeout)
+    function sendHeartbeat() {
+        fetch('send_udp.php?heartbeat=1').catch(() => {});
+        setTimeout(sendHeartbeat, 2000);
+    }
+    window.addEventListener('load', sendHeartbeat);
+
+    // Statusdaten per WebSocket empfangen
+    function updateStatusBox(data) {
+        const el = document.getElementById('status-content');
+        if (!el) return;
+        if (!data) {
+            el.textContent = 'Keine Statusdaten verfügbar.';
+            return;
+        }
+    let html = '';
+    html += `Modus: <b>${data.mode ?? '-'}</b><br>`;
+    html += `Stream: <b>${data.stream ? 'aktiv' : 'inaktiv'}</b><br>`;
+    html += `CPU-Temp: <b>${typeof data.cpu_temp === 'number' ? data.cpu_temp.toFixed(1) + '°C' : (data.cpu_temp ?? '-')}</b><br>`;
+    html += `Zeit: <b>${data.time ?? '-'}</b><br>`;
+    html += `Uptime: <b>${data.uptime ?? '-'}</b>`;
+        el.innerHTML = html;
+    }
+
+    function startStatusWebSocket() {
+        let wsProto = (location.protocol === 'https:') ? 'wss' : 'ws';
+        let wsUrl = wsProto + '://192.168.179.252:8765'; // Pi-IP explizit
+        let ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+            updateStatusBox({mode:'-',stream:false,cpu_temp:null,timestamp:null});
+        };
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                updateStatusBox(data);
+            } catch (e) {
+                updateStatusBox(null);
+            }
+        };
+        ws.onerror = () => {
+            updateStatusBox(null);
+        };
+        ws.onclose = () => {
+            updateStatusBox(null);
+            setTimeout(startStatusWebSocket, 2000); // reconnect
+        };
+    }
+
+    window.addEventListener('load', startStatusWebSocket);
+    </script>
 </body>
 </html>
