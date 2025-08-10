@@ -58,7 +58,7 @@ def start_joystick_server():
         if on_command:
             handled = on_command(command)
             if handled:
-                logger.info(f"Joystick-Befehl empfangen und verarbeitet: {command} (von {addr})")
+                logger.debug(f"Joystick-Befehl empfangen und verarbeitet: {command} (von {addr})")
                 # BUTTON:1 auswerten für Bildaufnahme
                 if ",BUTTON:1" in command:
                     training.save_training_image()
