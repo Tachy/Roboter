@@ -11,7 +11,6 @@ from . import config
 
 class SerialManager:
     def __init__(self):
-        import glob
         self.port = config.SIMULATED_SERIAL_PORT
         try:
             self.serial = serial.Serial(
