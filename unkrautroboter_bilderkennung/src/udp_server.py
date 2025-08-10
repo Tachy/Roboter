@@ -5,7 +5,18 @@ Modul für die UDP-Server-Funktionalität des Unkrautroboters.
 import socket
 import threading
 import time
+import logging
+from . import config
 from . import config, camera, training
+
+# Logger einrichten
+logger = logging.getLogger("udp_server")
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(
+        level=config.LOGLEVEL,
+        format='[%(asctime)s] %(levelname)s: %(message)s',
+        datefmt='%H:%M:%S'
+    )
 
 # Callback-Funktionen, die von außen gesetzt werden
 on_mode_change = None
@@ -23,7 +34,7 @@ def start_control_server():
     """Startet den UDP-Server für die Modussteuerung."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((config.UDP_IP, config.UDP_CONTROL_PORT))
-    print(f"UDP-Steuerkanal läuft auf Port {config.UDP_CONTROL_PORT}...")
+    logger.info(f"UDP-Steuerkanal läuft auf Port {config.UDP_CONTROL_PORT}...")
     
     while True:
         data, addr = sock.recvfrom(1024)
@@ -31,15 +42,15 @@ def start_control_server():
         if command in ["AUTO", "MANUAL"]:
             if on_mode_change:
                 on_mode_change(command)
-                print(f"Modus auf {command} geändert (von {addr})")
+                logger.info(f"Modus auf {command} geändert (von {addr})")
         else:
-            print(f"Unbekannter Befehl: {command} (von {addr})")
+            logger.warning(f"Unbekannter Befehl: {command} (von {addr})")
 
 def start_joystick_server():
     """Startet den UDP-Server für Joystick-Kommandos."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((config.UDP_IP, config.UDP_JOYSTICK_PORT))
-    print(f"UDP-Joystick-Server läuft auf Port {config.UDP_JOYSTICK_PORT}...")
+    logger.info(f"UDP-Joystick-Server läuft auf Port {config.UDP_JOYSTICK_PORT}...")
     
     while True:
         data, addr = sock.recvfrom(1024)
@@ -47,26 +58,26 @@ def start_joystick_server():
         if on_command:
             handled = on_command(command)
             if handled:
-                print(f"Joystick-Befehl empfangen und verarbeitet: {command} (von {addr})")
+                logger.info(f"Joystick-Befehl empfangen und verarbeitet: {command} (von {addr})")
                 # BUTTON:1 auswerten für Bildaufnahme
                 if ",BUTTON:1" in command:
                     training.save_training_image()
             else:
-                print(f"Joystick-Befehl ignoriert (von {addr})")
+                logger.debug(f"Joystick-Befehl ignoriert (von {addr})")
 
 # Heartbeat-Listener für den Videostream
 def _heartbeat_listener():
     global _last_heartbeat
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((config.UDP_IP, config.UDP_HEARTBEAT_PORT))
-    print(f"UDP-Heartbeat-Server läuft auf Port {config.UDP_HEARTBEAT_PORT}...")
+    logger.info(f"UDP-Heartbeat-Server läuft auf Port {config.UDP_HEARTBEAT_PORT}...")
     while True:
         try:
             data, addr = sock.recvfrom(1024)
             _last_heartbeat = time.time()
-            print(f"Heartbeat empfangen von {addr}")
+            logger.debug(f"Heartbeat empfangen von {addr}")
         except Exception as e:
-            print(f"Fehler im Heartbeat-Listener: {e}")
+            logger.error(f"Fehler im Heartbeat-Listener: {e}")
             time.sleep(1)
 
 # Watchdog für den Videostream basierend auf Heartbeat
@@ -76,12 +87,12 @@ def _stream_watchdog():
         now = time.time()
         if now - _last_heartbeat < config.HEARTBEAT_TIMEOUT:
             if not _stream_running:
-                print("Starte Videostream (Heartbeat aktiv)")
+                logger.info("Starte Videostream (Heartbeat aktiv)")
                 camera.start_stream()
                 _stream_running = True
         else:
             if _stream_running:
-                print("Stoppe Videostream (kein Heartbeat)")
+                logger.warning("Stoppe Videostream (kein Heartbeat)")
                 camera.stop_stream()
                 _stream_running = False
         time.sleep(1)

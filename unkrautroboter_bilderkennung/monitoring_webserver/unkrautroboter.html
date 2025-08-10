@@ -205,6 +205,14 @@
             html += `<br><br>Joystick X: <b>${data.joystick.x}</b> &nbsp; Y: <b>${data.joystick.y}</b>`;
         }
         el.innerHTML = html;
+
+        // Modus in der Selectionbox setzen, falls vorhanden
+        if (data && data.mode) {
+            const modeSelect = document.getElementById('mode');
+            if (modeSelect && modeSelect.value !== data.mode) {
+                modeSelect.value = data.mode;
+            }
+        }
     }
 
     function startStatusWebSocket() {

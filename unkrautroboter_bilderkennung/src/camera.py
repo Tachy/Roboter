@@ -5,12 +5,23 @@ Modul für die Kamera- und Stream-Funktionalität des Unkrautroboters.
 import io
 import threading
 import time
+import logging
+from . import config
 from PIL import Image
 from picamera2 import Picamera2 # type: ignore
 from picamera2.encoders import MJPEGEncoder # type: ignore
 from picamera2.outputs import FileOutput # type: ignore
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from . import config
+
+# Logger einrichten
+logger = logging.getLogger("camera")
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(
+        level=config.LOGLEVEL,
+        format='[%(asctime)s] %(levelname)s: %(message)s',
+        datefmt='%H:%M:%S'
+    )
 
 class MJPEGOutput(io.BufferedIOBase):
     def __init__(self):
@@ -27,6 +38,13 @@ class MJPEGOutput(io.BufferedIOBase):
             return self.frame if self.frame else b""
 
 class StreamHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # HTTP-Requests ins Logging-Modul umleiten
+        logger.info("%s - - [%s] %s" % (
+            self.client_address[0],
+            self.log_date_time_string(),
+            format % args
+        ))
     def do_GET(self):
         if not stream_active:
             self.send_response(503)
@@ -75,9 +93,9 @@ def start_stream():
                 time.sleep(0.5)
             picam2.start_recording(MJPEGEncoder(), FileOutput(stream_output))
             stream_active = True
-            print("Stream aktiviert.")
+            logger.info("Stream aktiviert.")
     except Exception as e:
-        print(f"Fehler beim Starten des Streams: {str(e)}")
+        logger.error(f"Fehler beim Starten des Streams: {str(e)}")
         stream_active = False  # Setze Status auf inaktiv bei Fehler
 
 def stop_stream():
@@ -87,9 +105,9 @@ def stop_stream():
         if stream_active:
             picam2.stop_recording()
             stream_active = False
-            print("Stream deaktiviert.")
+            logger.info("Stream deaktiviert.")
     except Exception as e:
-        print(f"Fehler beim Stoppen des Streams: {str(e)}")
+        logger.error(f"Fehler beim Stoppen des Streams: {str(e)}")
         stream_active = False  # Setze Status trotzdem auf inaktiv
 
 def is_streaming():
@@ -99,20 +117,18 @@ def is_streaming():
 def capture_image(filename):
     """Nimmt ein einzelnes Bild auf."""
     try:
-        print("Debug: Starte Bildaufnahme...")
+        logger.debug("Starte Bildaufnahme...")
         # Stelle sicher, dass die Kamera läuft
         if not picam2.started:
-            print("Debug: Starte Kamera...")
+            logger.debug("Starte Kamera...")
             picam2.start()
             time.sleep(0.5)
-            
         # Bild aufnehmen, ohne den Stream zu unterbrechen
         picam2.capture_file(filename)
-        print(f"Debug: Bild erfolgreich aufgenommen: {filename}")
-            
+        logger.info(f"Bild erfolgreich aufgenommen: {filename}")
     except Exception as e:
-        print(f"Fehler bei der Bildaufnahme: {str(e)}")
-    print("Stream aktiviert.")
+        logger.error(f"Fehler bei der Bildaufnahme: {str(e)}")
+    logger.debug("Stream aktiviert.")
 
 def capture_frame(filename="frame.jpg"):
     """Speichert das aktuelle Frame als Bild."""
@@ -124,7 +140,7 @@ def capture_frame(filename="frame.jpg"):
                 f.write(frame)
             return filename
         else:
-            print("Kein Frame verfügbar")
+            logger.warning("Kein Frame verfügbar")
             return None
     else:
         # Stream ist nicht aktiv, Einzelbild aufnehmen
@@ -139,7 +155,7 @@ def capture_frame(filename="frame.jpg"):
 def start_http_server():
     """Startet den HTTP-Server für den Stream."""
     server = HTTPServer(('', config.HTTP_PORT), StreamHandler)
-    print(f"HTTP-Server läuft auf Port {config.HTTP_PORT}...")
+    logger.info(f"HTTP-Server läuft auf Port {config.HTTP_PORT}...")
     server.serve_forever()
 
 # Kamera-Setup

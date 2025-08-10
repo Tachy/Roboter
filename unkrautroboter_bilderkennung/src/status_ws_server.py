@@ -3,8 +3,19 @@ import datetime
 import subprocess
 import json
 import websockets
+import logging
+from . import config
 from websockets.exceptions import ConnectionClosedOK
 from . import robot_control, camera
+
+# Logger einrichten
+logger = logging.getLogger("status_ws_server")
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(
+        level=config.LOGLEVEL,
+        format='[%(asctime)s] %(levelname)s: %(message)s',
+        datefmt='%H:%M:%S'
+    )
 
 WS_STATUS_PORT = 8765  # WebSocket-Port für Statusdaten
 
@@ -95,7 +106,7 @@ async def status_broadcast(websocket):
     try:
         while True:
             status = get_status_data()
-            print(f"[WebSocket-Status] Sende: {status}")
+            logger.debug(f"[WebSocket-Status] Sende: {status}")
             await websocket.send(json.dumps(status))
             await asyncio.sleep(1)
     except ConnectionClosedOK:
@@ -105,7 +116,7 @@ async def status_broadcast(websocket):
 def start_status_ws_server():
     async def run_server():
         async with websockets.serve(status_broadcast, "0.0.0.0", WS_STATUS_PORT):
-            print(f"WebSocket-Status-Server läuft auf Port {WS_STATUS_PORT}")
+            logger.info(f"WebSocket-Status-Server läuft auf Port {WS_STATUS_PORT}")
             await asyncio.Future()  # läuft für immer
 
     loop = asyncio.new_event_loop()

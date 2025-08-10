@@ -1,3 +1,6 @@
+# Logging Setup
+import logging
+LOGLEVEL = logging.INFO  # z.B. logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR
 """
 Konfigurationsmodul für den Unkrautroboter.
 Enthält alle wichtigen Konstanten und Einstellungen.

@@ -4,7 +4,18 @@ Hauptmodul für die Robotersteuerung.
 
 import threading
 import time
+import logging
+from . import config
 from . import config, camera, serial_manager, yolo_detector, udp_server, status_ws_server
+
+# Logger einrichten
+logger = logging.getLogger("robot_control")
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(
+        level=config.LOGLEVEL,
+        format='[%(asctime)s] %(levelname)s: %(message)s',
+        datefmt='%H:%M:%S'
+    )
 
 class RobotControl:
     def __init__(self):
@@ -14,7 +25,7 @@ class RobotControl:
         self.last_joystick = {"x": 0, "y": 0}
         self.last_joystick_lock = threading.Lock()
         msg = "START"
-        print("-> Arduino:", msg)
+        logger.info(f"-> Arduino: {msg}")
         self.send_command(msg)
 
     def get_mode(self):
@@ -27,7 +38,7 @@ class RobotControl:
         with self.mode_lock:
             self.mode = new_mode
             msg = f"MODE:{self.mode}"
-            print("-> Arduino:", msg)
+            logger.info(f"-> Arduino: {msg}")
             self.send_command(msg)
 
     def send_command(self, command):
@@ -38,7 +49,7 @@ class RobotControl:
         """Verarbeitet die automatische Steuerung."""
         line = self.serial.read_line()
         if line == "GETXY":
-            print("<- Arduino: GETXY")
+            logger.info("<- Arduino: GETXY")
 
             # Frame aufnehmen und verarbeiten
             img_path = camera.capture_frame()
@@ -51,13 +62,13 @@ class RobotControl:
             # Koordinaten an Arduino senden
             for x, y in coords:
                 msg = f"XY:{x:.1f},{y:.1f}"
-                print("-> Arduino:", msg)
+                logger.info(f"-> Arduino: {msg}")
                 self.send_command(msg)
                 time.sleep(0.05)
 
             # Abschlussmeldung
             self.send_command("DONE")
-            print("-> Arduino:", "DONE")
+            logger.info("-> Arduino: DONE")
 
     def handle_command(self, command):
         """Verarbeitet ein empfangenes Kommando."""
@@ -94,13 +105,13 @@ class RobotControl:
             udp_server.on_mode_change = self.set_mode
             udp_server.on_command = self.handle_command
             
-            print("Starte HTTP-Server...")
+            logger.info("Starte HTTP-Server...")
             threading.Thread(target=camera.start_http_server, daemon=True).start()
             
-            print("Starte UDP-Steuerkanal...")
+            logger.info("Starte UDP-Steuerkanal...")
             threading.Thread(target=udp_server.start_control_server, daemon=True).start()
             
-            print("Starte UDP-Joystick-Server...")
+            logger.info("Starte UDP-Joystick-Server...")
             threading.Thread(target=udp_server.start_joystick_server, daemon=True).start()
             
             # Starte Heartbeat-Listener für Videostream (UDP)
@@ -108,14 +119,14 @@ class RobotControl:
             # Starte WebSocket-Status-Server (im Hintergrund)
             threading.Thread(target=status_ws_server.start_status_ws_server, daemon=True).start()
             
-            print("Starte Hauptloop...")
+            logger.info("Starte Hauptloop...")
             while True:
                 if self.get_mode() == "AUTO":
                     self.process_auto_mode()
                 time.sleep(0.1)
 
         except KeyboardInterrupt:
-            print("Beendet.")
+            logger.info("Beendet.")
         finally:
             self.serial.close()
             if camera.stream_active:
