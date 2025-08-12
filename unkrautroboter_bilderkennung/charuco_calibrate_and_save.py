@@ -17,7 +17,7 @@ from pathlib import Path
 
 # Kamera: Picamera2 für Frame-Erfassung, cv2 für Verarbeitung
 try:
-    from picamera2 import Picamera2
+    from picamera2 import Picamera2 # type: ignore
 except ImportError as e:
     raise RuntimeError("Picamera2 ist nicht installiert. Installiere 'picamera2' (nur Raspberry Pi / libcamera).") from e
 

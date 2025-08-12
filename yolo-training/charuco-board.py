@@ -1,7 +1,7 @@
 import cv2
 import cv2.aruco as aruco
-from reportlab.pdfgen import canvas
-from reportlab.lib.units import mm
+from reportlab.pdfgen import canvas # type: ignore
+from reportlab.lib.units import mm # type: ignore
 
 # Board-Parameter
 squaresX, squaresY = 5, 7
