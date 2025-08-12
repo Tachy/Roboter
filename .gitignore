@@ -26,3 +26,4 @@ training/
 frame.jpg
 # yolo-training venv ignorieren
 yolo-training/.venv/
+yolo-training/dataset/
