@@ -1,8 +1,7 @@
-﻿# Pfade relativ zum Projekt
 path: dataset
 train: images/train
 val: images/val
 
-# Klassen anpassen:
 names:
   0: unkraut
+  1: moos

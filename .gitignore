@@ -27,3 +27,6 @@ frame.jpg
 # yolo-training venv ignorieren
 yolo-training/.venv/
 yolo-training/dataset/
+yolo-training/runs/
+yolo-training/yolov8m.pt 
+yolo-training/dataset.yaml

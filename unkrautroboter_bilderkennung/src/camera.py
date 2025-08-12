@@ -3,11 +3,14 @@ Modul für die Kamera- und Stream-Funktionalität des Unkrautroboters.
 """
 
 import io
+from pathlib import Path
 import threading
 import time
 import logging
 from . import config
 from PIL import Image
+import numpy as np
+import cv2  # für Undistortion-Remap
 from picamera2 import Picamera2 # type: ignore
 from picamera2.encoders import MJPEGEncoder # type: ignore
 from picamera2.outputs import FileOutput # type: ignore
@@ -82,30 +85,130 @@ def get_cpu_temperature():
     except FileNotFoundError:
         return "N/A"
 
+# ==== Kalibrierung / Undistortion ====
+_calib_loaded = False
+_calib_K = None
+_calib_D = None
+_calib_img_size = None  # (W, H) aus der Datei
+_calib_map1 = None
+_calib_map2 = None
+_undistort_cache = {}  # {(w,h): (map1, map2)}
+
+def _ensure_calibration_loaded():
+    """Lädt Kalibrierungsdaten aus ./calibration/cam_calib_charuco.npz, wenn vorhanden."""
+    global _calib_loaded, _calib_K, _calib_D, _calib_img_size, _calib_map1, _calib_map2
+    if _calib_loaded:
+        return True
+    calib_path = Path("./calibration/cam_calib_charuco.npz")
+    if not calib_path.exists():
+        logger.warning("Keine Kalibrierungsdatei gefunden: ./calibration/cam_calib_charuco.npz – speichere ungefilterte Bilder.")
+        _calib_loaded = False
+        return False
+    try:
+        d = np.load(str(calib_path), allow_pickle=True)
+        _calib_K = d["K"].astype(np.float64)
+        _calib_D = d["D"].astype(np.float64)
+        try:
+            sz = d["img_size"]
+            _calib_img_size = (int(sz[0]), int(sz[1]))  # (W,H)
+        except Exception:
+            _calib_img_size = None
+        # map1/map2 optional verwenden, wenn Größen passen
+        _calib_map1 = d.get("map1", None)
+        _calib_map2 = d.get("map2", None)
+        _calib_loaded = True
+        logger.info(f"Kalibrierung geladen (K,D) aus ./calibration/cam_calib_charuco.npz; img_size={_calib_img_size}")
+        return True
+    except Exception as e:
+        logger.error(f"Kalibrierung konnte nicht geladen werden: {e}")
+        _calib_loaded = False
+        return False
+
+def _get_maps_for_size(width: int, height: int):
+    """Erzeugt/cached Remap-Tabellen für gegebene Größe basierend auf K,D.
+    Berechnet newK für die Zielgröße automatisch (alpha=0).
+    """
+    key = (width, height)
+    if key in _undistort_cache:
+        return _undistort_cache[key]
+    if not _ensure_calibration_loaded():
+        return None
+    try:
+        # Wenn die Größen exakt passen und map1/map2 vorhanden sind, nutze sie direkt
+        if _calib_img_size == (width, height) and _calib_map1 is not None and _calib_map2 is not None:
+            logger.debug("Verwende gespeicherte Remap-Tabellen aus Kalibrierungsdatei.")
+            map1, map2 = _calib_map1, _calib_map2
+        else:
+            # Prüfe Aspect-Ratio – bei Abweichung warnen
+            if _calib_img_size is not None:
+                cw, ch = _calib_img_size
+                ar0 = cw / ch
+                ar1 = width / height
+                if abs(ar0 - ar1) > 1e-3:
+                    logger.warning(f"Abweichende Aspect-Ratio (calib {cw}x{ch} vs capture {width}x{height}) – Verzerrungen möglich.")
+                # Skaliere K auf Zielgröße
+                sx = width / cw
+                sy = height / ch
+                K_scaled = _calib_K.copy()
+                K_scaled[0,0] *= sx
+                K_scaled[0,2] *= sx
+                K_scaled[1,1] *= sy
+                K_scaled[1,2] *= sy
+            else:
+                # keine Info zu Kalibriergröße – versuche unskaliert (kann verzerren)
+                logger.warning("Kalibriergröße unbekannt – verwende unskaliertes K. Besser mit gleicher Auflösung kalibrieren.")
+                K_scaled = _calib_K
+
+            img_size = (width, height)
+            newK, roi = cv2.getOptimalNewCameraMatrix(K_scaled, _calib_D, img_size, alpha=0)
+            map1, map2 = cv2.initUndistortRectifyMap(K_scaled, _calib_D, None, newK, img_size, cv2.CV_16SC2)
+        _undistort_cache[key] = (map1, map2)
+        return map1, map2
+    except Exception as e:
+        logger.error(f"Fehler beim Erzeugen der Remap-Tabellen: {e}")
+        return None
+
 def start_stream():
     """Startet den Video-Stream."""
-    global stream_active
+    global stream_active, _sw_stream_thread, _sw_stream_stop
     try:
         if not stream_active:
             # Stelle sicher, dass die Kamera läuft
             if not picam2.started:
                 picam2.start()
                 time.sleep(0.5)
-            picam2.start_recording(MJPEGEncoder(), FileOutput(stream_output))
-            stream_active = True
-            logger.info("Stream aktiviert.")
+            if config.UNDISTORT_STREAM:
+                # Software-Stream mit Undistortion starten
+                _sw_stream_stop = False
+                _sw_stream_thread = threading.Thread(target=_software_stream_loop, daemon=True)
+                _sw_stream_thread.start()
+                stream_active = True
+                logger.info("Stream (software, undistorted) aktiviert.")
+            else:
+                # Hardware-MJPEG ohne Undistortion
+                picam2.start_recording(MJPEGEncoder(), FileOutput(stream_output))
+                stream_active = True
+                logger.info("Stream (hardware MJPEG) aktiviert.")
     except Exception as e:
         logger.error(f"Fehler beim Starten des Streams: {str(e)}")
         stream_active = False  # Setze Status auf inaktiv bei Fehler
 
 def stop_stream():
     """Stoppt den Video-Stream."""
-    global stream_active
+    global stream_active, _sw_stream_stop, _sw_stream_thread
     try:
         if stream_active:
-            picam2.stop_recording()
-            stream_active = False
-            logger.info("Stream deaktiviert.")
+            if config.UNDISTORT_STREAM:
+                _sw_stream_stop = True
+                # warte kurz auf Thread-Ende
+                if _sw_stream_thread is not None:
+                    _sw_stream_thread.join(timeout=1.0)
+                stream_active = False
+                logger.info("Stream (software) deaktiviert.")
+            else:
+                picam2.stop_recording()
+                stream_active = False
+                logger.info("Stream (hardware) deaktiviert.")
     except Exception as e:
         logger.error(f"Fehler beim Stoppen des Streams: {str(e)}")
         stream_active = False  # Setze Status trotzdem auf inaktiv
@@ -114,8 +217,8 @@ def is_streaming():
     """Prüft, ob der Stream aktiv ist."""
     return stream_active
 
-def capture_image(filename):
-    """Nimmt ein einzelnes Bild auf."""
+def capture_image(filename, apply_calibration: bool = False):
+    """Nimmt ein einzelnes Bild auf. Optional mit Undistortion per Kalibrierungsdatei."""
     try:
         logger.debug("Starte Bildaufnahme...")
         # Stelle sicher, dass die Kamera läuft
@@ -123,9 +226,35 @@ def capture_image(filename):
             logger.debug("Starte Kamera...")
             picam2.start()
             time.sleep(0.5)
-        # Bild aufnehmen, ohne den Stream zu unterbrechen
-        picam2.capture_file(filename)
-        logger.info(f"Bild erfolgreich aufgenommen: {filename}")
+        if apply_calibration:
+            # Array aufnehmen (RGB), zu BGR konvertieren für OpenCV, undistorten, speichern
+            arr = picam2.capture_array()
+            if arr is None:
+                raise RuntimeError("capture_array lieferte None")
+            # Picamera2 liefert RGB
+            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR) if arr.ndim == 3 and arr.shape[2] == 3 else arr
+            h, w = bgr.shape[:2]
+            # Hinweis loggen, falls Zielgröße nicht der Kalibriergröße entspricht
+            if _ensure_calibration_loaded() and _calib_img_size and (w, h) != _calib_img_size:
+                logger.info(f"Undistortion bei {w}x{h}, Kalibrierung bei {_calib_img_size} – skaliere K entsprechend.")
+            mm = _get_maps_for_size(w, h)
+            if mm is not None:
+                map1, map2 = mm
+                undist = cv2.remap(bgr, map1, map2, interpolation=cv2.INTER_LINEAR)
+                ok = cv2.imwrite(filename, undist)
+                if not ok:
+                    raise RuntimeError("cv2.imwrite fehlgeschlagen")
+                logger.info(f"Bild (undistorted) aufgenommen: {filename}")
+            else:
+                # Fallback: direkt speichern
+                ok = cv2.imwrite(filename, bgr)
+                if not ok:
+                    raise RuntimeError("cv2.imwrite fehlgeschlagen (Fallback)")
+                logger.info(f"Bild (ohne Kalibrierung) aufgenommen: {filename}")
+        else:
+            # Bild aufnehmen, ohne den Stream zu unterbrechen (direkt als Datei)
+            picam2.capture_file(filename)
+            logger.info(f"Bild erfolgreich aufgenommen: {filename}")
     except Exception as e:
         logger.error(f"Fehler bei der Bildaufnahme: {str(e)}")
     logger.debug("Stream aktiviert.")
@@ -164,4 +293,48 @@ picam2.configure(picam2.create_video_configuration(main={"size": config.CAMERA_R
 picam2.start()  # Kamera grundsätzlich starten
 stream_output = MJPEGOutput()
 stream_active = False
+
+# Software-Stream State
+_sw_stream_thread = None
+_sw_stream_stop = False
+
+def _software_stream_loop():
+    """Erzeugt MJPEG-Frames in Software mit optionaler Undistortion und schreibt sie in stream_output."""
+    global _sw_stream_stop
+    # Timing für Ziel-FPS
+    target_fps = max(1, int(config.STREAM_TARGET_FPS)) if hasattr(config, 'STREAM_TARGET_FPS') else 15
+    frame_interval = 1.0 / target_fps
+    # JPEG-Qualität
+    jpeg_quality = int(getattr(config, 'STREAM_JPEG_QUALITY', 80))
+    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), max(1, min(100, jpeg_quality))]
+
+    while not _sw_stream_stop:
+        t0 = time.time()
+        try:
+            # Frame holen (RGB), nach BGR
+            arr = picam2.capture_array()
+            if arr is None:
+                continue
+            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR) if arr.ndim == 3 and arr.shape[2] == 3 else arr
+            h, w = bgr.shape[:2]
+            # Undistortion, wenn Kalibrierung vorhanden
+            if _ensure_calibration_loaded():
+                mm = _get_maps_for_size(w, h)
+                if mm is not None:
+                    map1, map2 = mm
+                    bgr = cv2.remap(bgr, map1, map2, interpolation=cv2.INTER_LINEAR)
+            # JPEG encodieren
+            ok, enc = cv2.imencode('.jpg', bgr, encode_params)
+            if ok:
+                with stream_output.lock:
+                    stream_output.frame = enc.tobytes()
+        except Exception as e:
+            logger.debug(f"Software-Stream-Loop Fehler: {e}")
+
+        # FPS einhalten
+        dt = time.time() - t0
+        sleep_time = frame_interval - dt
+        if sleep_time > 0:
+            time.sleep(sleep_time)
+
 

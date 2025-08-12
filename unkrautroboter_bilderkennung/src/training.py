@@ -32,5 +32,6 @@ def save_training_image():
     logger.info("Bild speichern....")
     next_number = get_next_image_number()
     filename = os.path.join(config.TRAINING_IMAGE_DIR, f"bild_{next_number:04d}.jpg")
-    camera.capture_image(filename)
+    # Manuelle Trainingsaufnahme: mit Kalibrierung speichern, falls vorhanden
+    camera.capture_image(filename, apply_calibration=True)
     logger.info(f"Bild gespeichert: {filename}")
