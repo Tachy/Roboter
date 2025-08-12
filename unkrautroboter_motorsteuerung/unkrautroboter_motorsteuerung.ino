@@ -1,3 +1,4 @@
+#include <ArduinoJson.h>
 // === KONSTANTEN ===
 #define PWM_MIN          60
 #define MAX_KOORDINATEN 50
@@ -322,6 +323,7 @@ void anfrageUndAbarbeiten() {
   String cmdBuffer = "";
   
   while (millis() - start < 5000) {
+    sendeStatus();
     if (readSerialLine(cmdBuffer)) {
       // Prüfe auf Ende der Übertragung
       if (cmdBuffer == "DONE") {
@@ -349,11 +351,14 @@ void anfrageUndAbarbeiten() {
     float deltaY = zielY - aktuelleY_mm;
 
     setzeXPosition(zielX);  // absolut
+    sendeStatus();
     if (deltaY > 0.5) {
       fahreStrecke(deltaY, true, true);
       aktuelleY_mm += deltaY;
+      sendeStatus();
     }
     senkeBuersteZuPosition(40);
+    sendeStatus();
   }
 }
 
@@ -501,9 +506,40 @@ void processJoystickCommand(int x, int y) {
   Serial.println(pwmRight);
 }
 
+// Status-JSON alle 5 Sekunden senden, egal wo im Code
+void sendeStatus() {
+  static unsigned long lastStatusSend = 0;
+  if (millis() - lastStatusSend > 5000) {
+    sendeStatusJson();
+    lastStatusSend = millis();
+  }
+}
+
+// --- Status-JSON alle 5 Sekunden senden ---
+void sendeStatusJson() {
+  // Modus als String
+  const char* modeStr = "WAITING";
+  if (currentMode == MANUAL) modeStr = "MANUAL";
+  else if (currentMode == AUTO) modeStr = "AUTO";
+
+  StaticJsonDocument<256> doc;
+  doc["mode"] = modeStr;
+  doc["encL"] = encoderLinks;
+  doc["encR"] = encoderRechts;
+  doc["encX"] = encoderX;
+  doc["encZ"] = encoderZ;
+
+  char buffer[128];
+  size_t n = serializeJson(doc, buffer);
+  buffer[n] = '\0';
+  Serial1.println(buffer);
+}
+
 void loop() {
   processSerialCommand();  // Prüfe auf neue Kommandos
-  
+
+  sendeStatus();
+
   if (currentMode == WAITING_FOR_START) {
     // Im Wartezustand blinken wir eine LED oder geben periodisch eine Nachricht aus
     static unsigned long lastBlink = 0;
@@ -516,7 +552,7 @@ void loop() {
     // Im Auto-Modus kontinuierlich anfragen und abarbeiten
     anfrageUndAbarbeiten();
   }
-  
+
   // Kleine Pause um CPU-Last zu reduzieren
   delay(10);
 }
