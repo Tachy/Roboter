@@ -1,0 +1,28 @@
+# Globale Gitignore für das Projekt
+# Python- und venv-typische Regeln
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.env
+venv/
+
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+.installed.cfg
+training/
+frame.jpg
+# yolo-training venv ignorieren
+yolo-training/.venv/
