@@ -7,7 +7,7 @@ import threading
 import time
 import logging
 from . import config
-from . import config, camera, training
+from . import config, camera, training, robot_control
 
 # Logger einrichten
 logger = logging.getLogger("udp_server")
@@ -39,7 +39,7 @@ def start_control_server():
     while True:
         data, addr = sock.recvfrom(1024)
         command = data.decode().strip().upper()
-        if command in ["AUTO", "MANUAL"]:
+        if command in ["AUTO", "MANUAL", "DISTORTION"]:
             if on_mode_change:
                 on_mode_change(command)
                 logger.info(f"Modus auf {command} geändert (von {addr})")
@@ -59,9 +59,13 @@ def start_joystick_server():
             handled = on_command(command)
             if handled:
                 logger.debug(f"Joystick-Befehl empfangen und verarbeitet: {command} (von {addr})")
-                # BUTTON:1 auswerten für Bildaufnahme
+                # BUTTON:1: je nach Modus
                 if ",BUTTON:1" in command:
-                    training.save_training_image()
+                    mode = robot_control.robot.get_mode() if hasattr(robot_control, 'robot') else None
+                    if mode == "MANUAL":
+                        training.save_training_image()
+                    elif mode == "DISTORTION":
+                        robot_control.robot.calibration_button_pressed()
             else:
                 logger.debug(f"Joystick-Befehl ignoriert (von {addr})")
 

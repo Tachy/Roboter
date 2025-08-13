@@ -29,14 +29,5 @@ YOLO_MODEL_PATH = "pfad/zum/modell.pt"  # z. B. "best.pt"
 # Camera Setup
 CAMERA_RESOLUTION = (1280, 720)
 
-# Stream Undistortion Settings
-# Wenn True, wird der Live-Stream per Software entzerrt (cv2.remap -> JPEG).
-# Das kostet CPU, ist aber qualitativ besser. Bei False wird der rohe MJPEG-Encoder genutzt.
-UNDISTORT_STREAM = True
-# Zielbildrate für den Software-Stream (nur wirksam bei UNDISTORT_STREAM=True)
-STREAM_TARGET_FPS = 15
-# JPEG-Qualität (0-100) für den Software-Stream (nur wirksam bei UNDISTORT_STREAM=True)
-STREAM_JPEG_QUALITY = 80
-
 # Training Setup
 TRAINING_IMAGE_DIR = "./training/"

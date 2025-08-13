@@ -116,7 +116,9 @@
             <select id="mode" onchange="changeMode()">
                 <option value="AUTO">AUTO</option>
                 <option value="MANUAL">MANUAL</option>
+                <option value="DISTORTION">DISTORTION</option>
             </select>
+            
             <div id="status-box" style="margin-top:24px; width:100%; background:#222; border-radius:8px; padding:16px 12px; color:#fff; font-size:1em; min-height:70px;">
                 <b>Status:</b><br>
                 <span id="status-content">Warte auf Statusdaten ...</span>
@@ -141,10 +143,13 @@
                 },
                 body: `mode=${mode}`,
             });
+            
         } catch (error) {
             console.error(`Fehler beim Senden des Modus: ${error.message}`);
         }
     }
+
+    
 
     // Robuster Stream- und Hang-Check mit rekursivem Timeout (funktioniert auch bei Tab-Wechsel)
     let lastFrameTime = 0;
@@ -182,7 +187,7 @@
             return;
         }
         let html = '';
-        html += `Modus: <b>${data.mode ?? '-'}</b><br>`;
+    html += `Modus: <b>${data.mode ?? '-'}</b><br>`;
         html += `Stream: <b>${data.stream ? 'aktiv' : 'inaktiv'}</b><br>`;
         let cpuTempColor = '';
         let cpuTempVal = null;
@@ -212,6 +217,7 @@
             if (modeSelect && modeSelect.value !== data.mode) {
                 modeSelect.value = data.mode;
             }
+            
         }
     }
 

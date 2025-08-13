@@ -8,7 +8,6 @@ import threading
 import time
 import logging
 from . import config
-from PIL import Image
 import numpy as np
 import cv2  # für Undistortion-Remap
 from picamera2 import Picamera2 # type: ignore
@@ -32,8 +31,8 @@ class MJPEGOutput(io.BufferedIOBase):
         self.lock = threading.Lock()
 
     def write(self, buf):
+        # Wird vom Hardware-MJPEG-Encoder aufgerufen
         with self.lock:
-            # Direktes Durchreichen des JPEG-Bildes ohne Overlay
             self.frame = buf
 
     def read(self, size=-1):
@@ -85,7 +84,7 @@ def get_cpu_temperature():
     except FileNotFoundError:
         return "N/A"
 
-# ==== Kalibrierung / Undistortion ====
+# ==== Kalibrierung / Undistortion (nur für Einzelbilder) ====
 _calib_loaded = False
 _calib_K = None
 _calib_D = None
@@ -168,50 +167,41 @@ def _get_maps_for_size(width: int, height: int):
         logger.error(f"Fehler beim Erzeugen der Remap-Tabellen: {e}")
         return None
 
+# Overlay-Unterstützung entfällt im Hardware-Stream vollständig
+
+def reload_calibration():
+    """Leert den Map-Cache und lädt Kalibrierung neu (z. B. nach neuer Kalibrierdatei)."""
+    global _undistort_cache, _calib_loaded
+    _undistort_cache.clear()
+    _calib_loaded = False
+    _ensure_calibration_loaded()
+
 def start_stream():
-    """Startet den Video-Stream."""
-    global stream_active, _sw_stream_thread, _sw_stream_stop
+    """Startet den Video-Stream (Hardware-MJPEG, keine Undistortion)."""
+    global stream_active
     try:
         if not stream_active:
-            # Stelle sicher, dass die Kamera läuft
             if not picam2.started:
                 picam2.start()
                 time.sleep(0.5)
-            if config.UNDISTORT_STREAM:
-                # Software-Stream mit Undistortion starten
-                _sw_stream_stop = False
-                _sw_stream_thread = threading.Thread(target=_software_stream_loop, daemon=True)
-                _sw_stream_thread.start()
-                stream_active = True
-                logger.info("Stream (software, undistorted) aktiviert.")
-            else:
-                # Hardware-MJPEG ohne Undistortion
-                picam2.start_recording(MJPEGEncoder(), FileOutput(stream_output))
-                stream_active = True
-                logger.info("Stream (hardware MJPEG) aktiviert.")
+            picam2.start_recording(MJPEGEncoder(), FileOutput(stream_output))
+            stream_active = True
+            logger.info("Stream (Hardware MJPEG) aktiviert.")
     except Exception as e:
         logger.error(f"Fehler beim Starten des Streams: {str(e)}")
-        stream_active = False  # Setze Status auf inaktiv bei Fehler
+        stream_active = False
 
 def stop_stream():
     """Stoppt den Video-Stream."""
-    global stream_active, _sw_stream_stop, _sw_stream_thread
+    global stream_active
     try:
         if stream_active:
-            if config.UNDISTORT_STREAM:
-                _sw_stream_stop = True
-                # warte kurz auf Thread-Ende
-                if _sw_stream_thread is not None:
-                    _sw_stream_thread.join(timeout=1.0)
-                stream_active = False
-                logger.info("Stream (software) deaktiviert.")
-            else:
-                picam2.stop_recording()
-                stream_active = False
-                logger.info("Stream (hardware) deaktiviert.")
+            picam2.stop_recording()
+            stream_active = False
+            logger.info("Stream (Hardware) deaktiviert.")
     except Exception as e:
         logger.error(f"Fehler beim Stoppen des Streams: {str(e)}")
-        stream_active = False  # Setze Status trotzdem auf inaktiv
+        stream_active = False
 
 def is_streaming():
     """Prüft, ob der Stream aktiv ist."""
@@ -259,28 +249,6 @@ def capture_image(filename, apply_calibration: bool = False):
         logger.error(f"Fehler bei der Bildaufnahme: {str(e)}")
     logger.debug("Stream aktiviert.")
 
-def capture_frame(filename="frame.jpg"):
-    """Speichert das aktuelle Frame als Bild."""
-    if stream_active:
-        with stream_output.lock:
-            frame = stream_output.frame
-        if frame:
-            with open(filename, "wb") as f:
-                f.write(frame)
-            return filename
-        else:
-            logger.warning("Kein Frame verfügbar")
-            return None
-    else:
-        # Stream ist nicht aktiv, Einzelbild aufnehmen
-        image = picam2.capture_array()
-        img = Image.fromarray(image)
-        # Konvertiere zu RGB wenn nötig
-        if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
-            img = img.convert('RGB')
-        img.save(filename, format="JPEG")
-        return filename
-
 def start_http_server():
     """Startet den HTTP-Server für den Stream."""
     server = HTTPServer(('', config.HTTP_PORT), StreamHandler)
@@ -294,47 +262,6 @@ picam2.start()  # Kamera grundsätzlich starten
 stream_output = MJPEGOutput()
 stream_active = False
 
-# Software-Stream State
-_sw_stream_thread = None
-_sw_stream_stop = False
-
-def _software_stream_loop():
-    """Erzeugt MJPEG-Frames in Software mit optionaler Undistortion und schreibt sie in stream_output."""
-    global _sw_stream_stop
-    # Timing für Ziel-FPS
-    target_fps = max(1, int(config.STREAM_TARGET_FPS)) if hasattr(config, 'STREAM_TARGET_FPS') else 15
-    frame_interval = 1.0 / target_fps
-    # JPEG-Qualität
-    jpeg_quality = int(getattr(config, 'STREAM_JPEG_QUALITY', 80))
-    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), max(1, min(100, jpeg_quality))]
-
-    while not _sw_stream_stop:
-        t0 = time.time()
-        try:
-            # Frame holen (RGB), nach BGR
-            arr = picam2.capture_array()
-            if arr is None:
-                continue
-            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR) if arr.ndim == 3 and arr.shape[2] == 3 else arr
-            h, w = bgr.shape[:2]
-            # Undistortion, wenn Kalibrierung vorhanden
-            if _ensure_calibration_loaded():
-                mm = _get_maps_for_size(w, h)
-                if mm is not None:
-                    map1, map2 = mm
-                    bgr = cv2.remap(bgr, map1, map2, interpolation=cv2.INTER_LINEAR)
-            # JPEG encodieren
-            ok, enc = cv2.imencode('.jpg', bgr, encode_params)
-            if ok:
-                with stream_output.lock:
-                    stream_output.frame = enc.tobytes()
-        except Exception as e:
-            logger.debug(f"Software-Stream-Loop Fehler: {e}")
-
-        # FPS einhalten
-        dt = time.time() - t0
-        sleep_time = frame_interval - dt
-        if sleep_time > 0:
-            time.sleep(sleep_time)
+# Keine Software-Stream-Schleife mehr
 
 

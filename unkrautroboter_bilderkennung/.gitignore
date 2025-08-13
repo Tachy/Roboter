@@ -1,0 +1,5 @@
+state/
+*.npz
+__pycache__/
+*.pyc
+*.log
