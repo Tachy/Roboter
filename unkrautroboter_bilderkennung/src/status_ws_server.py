@@ -116,7 +116,6 @@ async def status_broadcast(websocket):
                 curr_ts = camera.get_last_capture_timestamp()
                 if curr_ts != last_ts and curr_ts is not None:
                     status = get_status_data()
-                    logger.info(f"[WebSocket-Status] Sende (neue Aufnahme): {status}")
                     await websocket.send(json.dumps(status))
                     last_ts = curr_ts
                     sent_on_change = True

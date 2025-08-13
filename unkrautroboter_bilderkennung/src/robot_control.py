@@ -154,6 +154,13 @@ class RobotControl:
         """Wird aufgerufen, wenn im DISTORTION-Modus der Joystick-Button gedrückt wurde."""
         if self.get_mode() != "DISTORTION":
             return
+        # Wenn Kamera nicht läuft (kein Stream aktiv), Klick ignorieren
+        from . import camera
+        if not camera.is_camera_started():
+            # Optional: Logging
+            import logging
+            logging.info("[Calib] Klick ignoriert: Kamera/Stream nicht aktiv.")
+            return
         if self.calib_session is None:
             # Erster Klick: Kalibriervorgang starten, aber noch kein Snapshot
             self.calib_session = CalibrationSession(target_snapshots=20)
