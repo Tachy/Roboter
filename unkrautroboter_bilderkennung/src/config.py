@@ -26,13 +26,7 @@ HTTP_PORT = 8080
 USE_DUMMY = True  # Auf False setzen, wenn das echte YOLO-Modell verwendet wird
 YOLO_MODEL_PATH = "./model/best.pt"  # z. B. "best.pt"
 
-# Ausführungsmodus
-# True: YOLO läuft in separatem Subprozess (empfohlen für Stabilität und Timeout-Kontrolle)
-# False: YOLO läuft inline im selben Prozess (einfacher, aber kein harter Timeout und Risiko bei nativen Crashes)
-YOLO_SAFE_EXECUTE = True
-
-# Inferenz-Parameter
-# Achtung: YOLO_TIMEOUT_SEC gilt nur für den Subprozess-Modus (YOLO_SAFE_EXECUTE=True)
+# Inferenz-Parameter (Subprozess mit Timeout)
 YOLO_TIMEOUT_SEC = 40
 YOLO_IMG_SIZE = 640   # Netzgröße (h, w); rechteckig für 720p→736x1280 mit wenig Padding
 YOLO_CONF = 0.25      # Konfidenzschwelle
@@ -43,3 +37,7 @@ CAMERA_RESOLUTION = (1280, 720)
 
 # Training Setup
 TRAINING_IMAGE_DIR = "./training/"
+
+# Weltkoordinaten: optionaler XY-Versatz (mm), um den Ursprung zu verschieben (z. B. unter die linke Bürste)
+# Beispiel: WORLD_OFFSET_XY_MM = (x_mm, y_mm) – wird von pixel_to_world subtrahiert
+WORLD_OFFSET_XY_MM = (0.0, 0.0)

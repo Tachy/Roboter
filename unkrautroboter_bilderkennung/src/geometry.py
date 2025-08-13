@@ -22,6 +22,7 @@ import os
 from typing import Optional, Tuple
 
 import numpy as np
+from . import config
 
 logger = logging.getLogger("geometry")
 if not logging.getLogger().hasHandlers():
@@ -196,12 +197,14 @@ def pixel_to_world(px: float, py: float) -> Optional[Tuple[float, float]]:
     if _H is not None:
         res = _apply_homography(px, py)
         if res is not None:
-            return res
+            ox, oy = getattr(config, 'WORLD_OFFSET_XY_MM', (0.0, 0.0))
+            return float(res[0] - ox), float(res[1] - oy)
     # 2) Extrinsik
     if _K is not None and _R is not None and _t is not None:
         res = _ray_plane_intersection(px, py)
         if res is not None:
-            return res
+            ox, oy = getattr(config, 'WORLD_OFFSET_XY_MM', (0.0, 0.0))
+            return float(res[0] - ox), float(res[1] - oy)
     return None
 
 

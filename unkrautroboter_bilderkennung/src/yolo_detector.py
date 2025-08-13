@@ -231,9 +231,8 @@ def process_image(image_path):
         conf = float(getattr(config, 'YOLO_CONF', 0.25))
         iou = float(getattr(config, 'YOLO_IOU', 0.45))
 
-        # Inferenz in separatem Prozess (robust gegen native Crashes)
-        use_safe = bool(getattr(config, 'YOLO_SAFE_EXECUTE', True))
-        if use_safe and (_weights_abs or True):
+    # Inferenz in separatem Prozess (robust gegen native Crashes)
+    if _weights_abs or True:
             use_fork = ('fork' in mp.get_all_start_methods())
             ctx = mp.get_context('fork' if use_fork else 'spawn')
             q = ctx.Queue(maxsize=1)
@@ -318,37 +317,6 @@ def process_image(image_path):
                     pass
             dur = (time.time() - t0) * 1000.0
             logger.info(f"[YOLO] Ergebnisse: {len(coords)} Position(en) in {dur:.0f}ms")
-            if coords:
-                try:
-                    x0, y0 = coords[0]
-                    logger.info(f"[YOLO] Erste Position: ({x0:.1f},{y0:.1f})")
-                except Exception:
-                    pass
-            return coords
-        else:
-            # Inline-Inferenz (falls safe disabled)
-            try:
-                results = model.predict(source=image_path, device=device, imgsz=imgsz, conf=conf, iou=iou, verbose=False, stream=False, save=False, workers=0)
-            except Exception as e:
-                logger.exception(f"[YOLO] Inferenz fehlgeschlagen: {e}")
-                return []
-            # Annotiertes Bild veröffentlichen
-            try:
-                if results and len(results) > 0:
-                    annotated = results[0].plot()
-                    if annotated is not None:
-                        if annotated.ndim == 3 and annotated.shape[2] == 4:
-                            annotated = cv2.cvtColor(annotated, cv2.COLOR_RGBA2BGR)
-                        camera._encode_and_store_last_capture(annotated, quality=85)
-                        try:
-                            h, w = annotated.shape[:2]
-                            logger.info(f"[YOLO] Annotierte Vorschau veröffentlicht ({w}x{h}).")
-                        except Exception:
-                            logger.info("[YOLO] Annotierte Vorschau veröffentlicht.")
-            except Exception:
-                pass
-            coords = extract_xy(results)
-            logger.info(f"[YOLO] Ergebnisse: {len(coords)} Position(en)")
             if coords:
                 try:
                     x0, y0 = coords[0]
