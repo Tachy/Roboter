@@ -106,7 +106,7 @@ class RobotControl:
 
             # Entzerrtes Einzelbild aufnehmen und verarbeiten
             filename = "frame.jpg"
-            camera.capture_image(filename, apply_calibration=True)
+            camera.capture_image(filename)
             img_path = filename
 
             coords = yolo_detector.process_image(img_path)

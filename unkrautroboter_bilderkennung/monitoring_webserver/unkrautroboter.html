@@ -123,6 +123,12 @@
                 <b>Status:</b><br>
                 <span id="status-content">Warte auf Statusdaten ...</span>
             </div>
+
+            <div id="last-capture-box" style="margin-top:16px; width:100%; background:#222; border-radius:8px; padding:10px; color:#fff;">
+                <div style="font-weight:bold; margin-bottom:6px;">Letzte Aufnahme</div>
+                <img id="last-capture-img" src="" alt="Letzte Aufnahme" style="width:100%; max-width:260px; height:auto; border:1px solid #333; border-radius:6px; background:#111; display:none;" />
+                <div id="last-capture-empty" style="color:#aaa;">Noch keine Aufnahme</div>
+            </div>
         </div>
         <div id="video-container">
             <h2>Harry Botter live</h2>
@@ -151,25 +157,45 @@
 
     
 
-    // Robuster Stream- und Hang-Check mit rekursivem Timeout (funktioniert auch bei Tab-Wechsel)
-    let lastFrameTime = 0;
-    function reloadStreamImg() {
+    // MJPEG-Stream nur einmal setzen und nur bei Fehlern erneut versuchen
+    const STREAM_URL = 'http://192.168.179.252:8080/stream';
+    let streamInitialized = false;
+    let streamRetryTimer = null;
+
+    function ensureStream(active) {
         const img = document.getElementById('stream-img');
-        if (!img) return;
-        img.onload = function() {
-            lastFrameTime = Date.now();
-            document.getElementById('stream-placeholder').style.display = 'none';
-            setTimeout(reloadStreamImg, 1000);
-        };
-        img.onerror = function() {
-            if (Date.now() - lastFrameTime > 3000) {
-                document.getElementById('stream-placeholder').style.display = 'flex';
+        const placeholder = document.getElementById('stream-placeholder');
+        if (!img || !placeholder) return;
+
+        if (active) {
+            // Initialisieren oder erneut verbinden, wenn Quelle fehlt
+            if (!streamInitialized || !img.src || !img.src.startsWith(STREAM_URL)) {
+                // Handler setzen (einmalig sinnvoll)
+                img.onload = function() {
+                    placeholder.style.display = 'none';
+                };
+                img.onerror = function() {
+                    placeholder.style.display = 'flex';
+                    // Backoff-Retry nach 2s, mit einmaligem Cache-Buster
+                    if (streamRetryTimer) clearTimeout(streamRetryTimer);
+                    streamRetryTimer = setTimeout(() => {
+                        img.src = STREAM_URL + '?r=' + Date.now();
+                    }, 2000);
+                };
+                img.src = STREAM_URL;
+                streamInitialized = true;
             }
-            setTimeout(reloadStreamImg, 1000);
-        };
-        img.src = `http://192.168.179.252:8080/stream?ts=${Date.now()}`;
+        } else {
+            // Deaktivieren: Verbindung schließen und Platzhalter anzeigen
+            if (streamRetryTimer) {
+                clearTimeout(streamRetryTimer);
+                streamRetryTimer = null;
+            }
+            img.removeAttribute('src');
+            placeholder.style.display = 'flex';
+            streamInitialized = false;
+        }
     }
-    window.addEventListener('load', reloadStreamImg);
 
     // Heartbeat-Logik: alle 2 Sekunden Heartbeat senden, solange Seite offen (auch mit Timeout)
     function sendHeartbeat() {
@@ -187,7 +213,7 @@
             return;
         }
         let html = '';
-    html += `Modus: <b>${data.mode ?? '-'}</b><br>`;
+        html += `Modus: <b>${data.mode ?? '-'}</b><br>`;
         html += `Stream: <b>${data.stream ? 'aktiv' : 'inaktiv'}</b><br>`;
         let cpuTempColor = '';
         let cpuTempVal = null;
@@ -209,7 +235,7 @@
         if (data.mode === 'MANUAL' && data.joystick && typeof data.joystick.x === 'number' && typeof data.joystick.y === 'number') {
             html += `<br><br>Joystick X: <b>${data.joystick.x}</b> &nbsp; Y: <b>${data.joystick.y}</b>`;
         }
-        el.innerHTML = html;
+    el.innerHTML = html;
 
         // Modus in der Selectionbox setzen, falls vorhanden
         if (data && data.mode) {
@@ -218,6 +244,30 @@
                 modeSelect.value = data.mode;
             }
             
+        }
+
+        // Letzte Aufnahme aktualisieren, wenn es einen neuen Zeitstempel gibt
+        const tsRaw = data.last_capture_ts;
+        if (tsRaw !== null && tsRaw !== undefined) {
+            const img = document.getElementById('last-capture-img');
+            const empty = document.getElementById('last-capture-empty');
+            const ts = Number(tsRaw);
+            if (!Number.isNaN(ts)) {
+                const newSrc = `http://192.168.179.252:8080/last_capture.jpg?ts=${ts}`;
+                if (img.getAttribute('data-ts') !== String(ts)) {
+                    img.onload = () => { img.style.display = 'block'; if (empty) empty.style.display = 'none'; };
+                    img.onerror = () => { img.style.display = 'none'; if (empty) empty.style.display = 'block'; };
+                    img.setAttribute('data-ts', String(ts));
+                    img.src = newSrc;
+                    // Optionales Debugging:
+                    // console.debug('Preview aktualisiert, ts=', ts);
+                }
+            }
+        }
+
+        // Stream entsprechend Server-Status (an/aus) verwalten
+        if (typeof data.stream !== 'undefined') {
+            ensureStream(!!data.stream);
         }
     }
 
@@ -246,7 +296,11 @@
         };
     }
 
-    window.addEventListener('load', startStatusWebSocket);
+    window.addEventListener('load', () => {
+        startStatusWebSocket();
+        // Versuche initial zu verbinden; wird durch WS-Status überschrieben
+        ensureStream(true);
+    });
     </script>
 </body>
 </html>

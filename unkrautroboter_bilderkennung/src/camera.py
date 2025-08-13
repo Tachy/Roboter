@@ -13,7 +13,11 @@ import cv2  # für Undistortion-Remap
 from picamera2 import Picamera2 # type: ignore
 from picamera2.encoders import MJPEGEncoder # type: ignore
 from picamera2.outputs import FileOutput # type: ignore
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
+try:
+    from http.server import ThreadingHTTPServer as ServerClass
+except ImportError:
+    from http.server import HTTPServer as ServerClass  # Fallback (single-threaded)
 from . import config
 
 # Logger einrichten
@@ -48,14 +52,42 @@ class StreamHandler(BaseHTTPRequestHandler):
             format % args
         ))
     def do_GET(self):
-        if not stream_active:
-            self.send_response(503)
-            self.end_headers()
-            self.wfile.write(b"Stream ist deaktiviert.")
+        # /last_capture: immer bedienen, auch wenn der Stream aus ist
+        if self.path.startswith('/last_capture'):
+            # Kleines Hilfsbild: letztes per capture_image aufgenommenes JPEG ausliefern
+            with _last_capture_lock:
+                data = _last_capture_bytes
+                ts = _last_capture_ts
+            if data:
+                try:
+                    self.send_response(200)
+                    self.send_header('Age', '0')
+                    self.send_header('Cache-Control', 'no-cache, private, max-age=0, must-revalidate')
+                    self.send_header('Pragma', 'no-cache')
+                    self.send_header('Content-Type', 'image/jpeg')
+                    self.send_header('Content-Length', str(len(data)))
+                    self.send_header('Connection', 'close')
+                    self.end_headers()
+                    self.wfile.write(data)
+                    try:
+                        human_ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts)) if ts else '-'
+                        logger.info(f"/last_capture an {self.client_address[0]} gesendet ({len(data)} Bytes, ts={human_ts})")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            else:
+                self.send_response(404)
+                self.end_headers()
             return
 
-        # Erlaube auch /stream?irgendwas
+        # /stream nur bedienen, wenn aktiviert; erlaube auch /stream?irgendwas
         if self.path.startswith('/stream'):
+            if not stream_active:
+                self.send_response(503)
+                self.end_headers()
+                self.wfile.write(b"Stream ist deaktiviert.")
+                return
             self.send_response(200)
             self.send_header('Age', '0')
             self.send_header('Cache-Control', 'no-cache, private')
@@ -92,6 +124,33 @@ _calib_img_size = None  # (W, H) aus der Datei
 _calib_map1 = None
 _calib_map2 = None
 _undistort_cache = {}  # {(w,h): (map1, map2)}
+
+# Letztes aufgenommenes Bild (JPEG) im Speicher halten, inkl. Zeitstempel
+_last_capture_lock = threading.Lock()
+_last_capture_bytes: bytes | None = None
+_last_capture_ts: float | None = None
+_last_capture_bytes: bytes | None = None
+_last_capture_ts: float | None = None
+
+def _set_last_capture_bytes(data: bytes) -> None:
+    """Safely store last-capture JPEG bytes and timestamp."""
+    global _last_capture_bytes, _last_capture_ts
+    with _last_capture_lock:
+        _last_capture_bytes = data
+        _last_capture_ts = time.time()
+
+def _encode_and_store_last_capture(bgr_image, quality: int = 90) -> bool:
+    """Encode a BGR image to JPEG and store it for the preview. Returns True on success."""
+    try:
+        ok_enc, enc = cv2.imencode('.jpg', bgr_image, [int(cv2.IMWRITE_JPEG_QUALITY), max(1, min(100, quality))])
+        if ok_enc:
+            _set_last_capture_bytes(enc.tobytes())
+            return True
+    except Exception:
+        pass
+    return False
+
+# kein Datei-Reload nötig; wir encodieren direkt aus dem Array für die Vorschau
 
 def _ensure_calibration_loaded():
     """Lädt Kalibrierungsdaten aus ./calibration/cam_calib_charuco.npz, wenn vorhanden."""
@@ -176,6 +235,11 @@ def reload_calibration():
     _calib_loaded = False
     _ensure_calibration_loaded()
 
+def get_last_capture_timestamp():
+    """Gibt den Zeitstempel (epoch seconds, float) des letzten capture_image-Aufrufs zurück, sonst None."""
+    with _last_capture_lock:
+        return _last_capture_ts
+
 def start_stream():
     """Startet den Video-Stream (Hardware-MJPEG, keine Undistortion)."""
     global stream_active
@@ -207,8 +271,9 @@ def is_streaming():
     """Prüft, ob der Stream aktiv ist."""
     return stream_active
 
-def capture_image(filename, apply_calibration: bool = False):
-    """Nimmt ein einzelnes Bild auf. Optional mit Undistortion per Kalibrierungsdatei."""
+# Alte Signatur entfernt; neue Signatur unten
+def capture_image(filename: str):
+    """Nimmt ein einzelnes Bild auf. Versucht Undistortion per Kalibrierungsdatei; fällt sonst auf Rohbild zurück."""
     try:
         logger.debug("Starte Bildaufnahme...")
         # Stelle sicher, dass die Kamera läuft
@@ -216,43 +281,51 @@ def capture_image(filename, apply_calibration: bool = False):
             logger.debug("Starte Kamera...")
             picam2.start()
             time.sleep(0.5)
-        if apply_calibration:
-            # Array aufnehmen (RGB), zu BGR konvertieren für OpenCV, undistorten, speichern
-            arr = picam2.capture_array()
-            if arr is None:
-                raise RuntimeError("capture_array lieferte None")
-            # Picamera2 liefert RGB
-            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR) if arr.ndim == 3 and arr.shape[2] == 3 else arr
-            h, w = bgr.shape[:2]
-            # Hinweis loggen, falls Zielgröße nicht der Kalibriergröße entspricht
-            if _ensure_calibration_loaded() and _calib_img_size and (w, h) != _calib_img_size:
-                logger.info(f"Undistortion bei {w}x{h}, Kalibrierung bei {_calib_img_size} – skaliere K entsprechend.")
-            mm = _get_maps_for_size(w, h)
-            if mm is not None:
-                map1, map2 = mm
-                undist = cv2.remap(bgr, map1, map2, interpolation=cv2.INTER_LINEAR)
-                ok = cv2.imwrite(filename, undist)
-                if not ok:
-                    raise RuntimeError("cv2.imwrite fehlgeschlagen")
-                logger.info(f"Bild (undistorted) aufgenommen: {filename}")
+        # Array aufnehmen (RGB oder BGR, je nach Picamera2-Version)
+        arr = picam2.capture_array()
+        if arr is None:
+            raise RuntimeError("capture_array lieferte None")
+        # Auto-detect color order: if mean R > mean B, assume RGB; else BGR
+        if arr.ndim == 3 and arr.shape[2] == 3:
+            mean0 = float(np.mean(arr[:,:,0]))
+            mean2 = float(np.mean(arr[:,:,2]))
+            if mean2 > mean0:
+                logger.debug(f"Detected RGB input (meanR={mean2:.1f} > meanB={mean0:.1f}), converting to BGR.")
+                bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
             else:
-                # Fallback: direkt speichern
-                ok = cv2.imwrite(filename, bgr)
-                if not ok:
-                    raise RuntimeError("cv2.imwrite fehlgeschlagen (Fallback)")
-                logger.info(f"Bild (ohne Kalibrierung) aufgenommen: {filename}")
+                logger.debug(f"Detected BGR input (meanB={mean0:.1f} >= meanR={mean2:.1f}), using as-is.")
+                bgr = arr
         else:
-            # Bild aufnehmen, ohne den Stream zu unterbrechen (direkt als Datei)
-            picam2.capture_file(filename)
-            logger.info(f"Bild erfolgreich aufgenommen: {filename}")
+            bgr = arr
+        h, w = bgr.shape[:2]
+        # Hinweis loggen, falls Zielgröße nicht der Kalibriergröße entspricht
+        if _ensure_calibration_loaded() and _calib_img_size and (w, h) != _calib_img_size:
+            logger.info(f"Undistortion bei {w}x{h}, Kalibrierung bei {_calib_img_size} – skaliere K entsprechend.")
+        mm = _get_maps_for_size(w, h)
+        if mm is not None:
+            map1, map2 = mm
+            out = cv2.remap(bgr, map1, map2, interpolation=cv2.INTER_LINEAR)
+            # Für Web-Preview parallel in Memory als JPEG encodieren
+            _encode_and_store_last_capture(out, quality=90)
+            ok = cv2.imwrite(filename, out)
+            if not ok:
+                raise RuntimeError("cv2.imwrite fehlgeschlagen")
+            logger.info(f"Bild (undistorted) aufgenommen: {filename}")
+        else:
+            # Fallback: direkt speichern (Rohbild)
+            _encode_and_store_last_capture(bgr, quality=90)
+            ok = cv2.imwrite(filename, bgr)
+            if not ok:
+                raise RuntimeError("cv2.imwrite fehlgeschlagen (Fallback)")
+            logger.info(f"Bild (ohne Kalibrierung) aufgenommen: {filename}")
     except Exception as e:
         logger.error(f"Fehler bei der Bildaufnahme: {str(e)}")
-    logger.debug("Stream aktiviert.")
 
 def start_http_server():
     """Startet den HTTP-Server für den Stream."""
-    server = HTTPServer(('', config.HTTP_PORT), StreamHandler)
-    logger.info(f"HTTP-Server läuft auf Port {config.HTTP_PORT}...")
+    server = ServerClass(('', config.HTTP_PORT), StreamHandler)
+    server_type = getattr(server, '__class__', type(server)).__name__
+    logger.info(f"HTTP-Server ({server_type}) läuft auf Port {config.HTTP_PORT}...")
     server.serve_forever()
 
 # Kamera-Setup

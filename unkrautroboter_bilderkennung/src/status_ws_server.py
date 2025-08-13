@@ -91,6 +91,7 @@ def get_status_data():
         "cpu_freq": cpu_freq,
         "cpu_load": cpu_load,
         "time": now,
+        "last_capture_ts": camera.get_last_capture_timestamp(),
         "uptime": uptime_str
     }
     # Joystick-Daten nur im Modus MANUAL mitsenden
@@ -104,11 +105,31 @@ def get_status_data():
 
 async def status_broadcast(websocket):
     try:
+        # Reagiere schnell auf neue Aufnahmen: sende sofort, wenn last_capture_ts sich ändert
+        last_ts = camera.get_last_capture_timestamp()
+        heartbeat_interval = 1.0
+        quick_checks = 10  # 10 * 0.1s = 1s
         while True:
+            # Schnelle Checks für neue Aufnahmen
+            sent_on_change = False
+            for _ in range(quick_checks):
+                curr_ts = camera.get_last_capture_timestamp()
+                if curr_ts != last_ts and curr_ts is not None:
+                    status = get_status_data()
+                    logger.info(f"[WebSocket-Status] Sende (neue Aufnahme): {status}")
+                    await websocket.send(json.dumps(status))
+                    last_ts = curr_ts
+                    sent_on_change = True
+                    break
+                await asyncio.sleep(heartbeat_interval / quick_checks)
+
+            if sent_on_change:
+                continue
+
+            # Periodischer Heartbeat-Status
             status = get_status_data()
-            logger.debug(f"[WebSocket-Status] Sende: {status}")
+            logger.debug(f"[WebSocket-Status] Sende (Heartbeat): {status}")
             await websocket.send(json.dumps(status))
-            await asyncio.sleep(1)
     except ConnectionClosedOK:
         # Verbindung wurde sauber vom Client geschlossen – kein Fehler, kein Log nötig
         pass
