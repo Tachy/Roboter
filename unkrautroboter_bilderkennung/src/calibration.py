@@ -109,7 +109,7 @@ class CalibrationSession:
     # Overlay-Funktion entfällt
 
     def capture_snapshot(self):
-        # aktuelles Frame holen
+        # aktuelles Frame holen – im Kalibrierungsmodus läuft der Stream
         arr = camera.picam2.capture_array()
         if arr is None:
             return False, (0, 0)
@@ -146,7 +146,7 @@ class CalibrationSession:
         return True, counts
 
     def finalize(self):
-        # Bildgröße aus aktuellem Frame ableiten
+        # Bildgröße aus aktuellem Frame ableiten – im Kalibrierungsmodus läuft der Stream
         arr = camera.picam2.capture_array()
         if arr is None:
             raise RuntimeError("Kein Kamerabild verfügbar für Finalisierung.")

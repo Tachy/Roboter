@@ -271,16 +271,35 @@ def is_streaming():
     """Prüft, ob der Stream aktiv ist."""
     return stream_active
 
+# Kamera-Helfer
+def is_camera_started() -> bool:
+    return picam2.started
+
+def ensure_camera_started() -> bool:
+    """Sicherstellen, dass die Kamera läuft. Liefert True, wenn sie hier gestartet wurde."""
+    if not picam2.started:
+        logger.debug("Starte Kamera...")
+        picam2.start()
+        time.sleep(0.5)
+        return True
+    return False
+
+def stop_camera_if_idle():
+    """Kamera stoppen, wenn kein Stream aktiv ist."""
+    try:
+        if not stream_active and picam2.started:
+            picam2.stop()
+            logger.info("Kamera gestoppt (idle, kein Stream aktiv).")
+    except Exception as e:
+        logger.error(f"Fehler beim Stoppen der Kamera: {e}")
+
 # Alte Signatur entfernt; neue Signatur unten
 def capture_image(filename: str):
     """Nimmt ein einzelnes Bild auf. Versucht Undistortion per Kalibrierungsdatei; fällt sonst auf Rohbild zurück."""
     try:
         logger.debug("Starte Bildaufnahme...")
         # Stelle sicher, dass die Kamera läuft
-        if not picam2.started:
-            logger.debug("Starte Kamera...")
-            picam2.start()
-            time.sleep(0.5)
+        started_here = ensure_camera_started()
         arr = picam2.capture_array()
         if arr is None:
             raise RuntimeError("capture_array lieferte None")
@@ -312,6 +331,14 @@ def capture_image(filename: str):
             logger.info(f"Bild (ohne Kalibrierung) aufgenommen: {filename}")
     except Exception as e:
         logger.error(f"Fehler bei der Bildaufnahme: {str(e)}")
+    finally:
+        # Kamera wieder stoppen, falls sie nur für dieses Bild gestartet wurde und kein Stream läuft
+        try:
+            if started_here and not stream_active:
+                picam2.stop()
+                logger.info("Kamera nach Einzelaufnahme gestoppt (kein aktiver Stream).")
+        except Exception:
+            pass
 
 def start_http_server():
     """Startet den HTTP-Server für den Stream."""
@@ -323,7 +350,6 @@ def start_http_server():
 # Kamera-Setup
 picam2 = Picamera2()
 picam2.configure(picam2.create_video_configuration(main={"size": config.CAMERA_RESOLUTION}))
-picam2.start()  # Kamera grundsätzlich starten
 stream_output = MJPEGOutput()
 stream_active = False
 

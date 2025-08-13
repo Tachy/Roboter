@@ -176,6 +176,8 @@ class RobotControl:
                     camera._encode_and_store_last_capture(preview, quality=85)
             except Exception:
                 pass
+            finally:
+                pass
             return
         # Ab hier: Session existiert -> Snapshots sammeln
         ok, counts = self.calib_session.capture_snapshot()
@@ -203,6 +205,8 @@ class RobotControl:
                         cv2.putText(preview, "Kalibrierung abgeschlossen", (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
                         camera._encode_and_store_last_capture(preview, quality=85)
                 except Exception:
+                    pass
+                finally:
                     pass
             except Exception as e:
                 logger.error(f"[Calib] Fehler bei Finalisierung: {e}")
