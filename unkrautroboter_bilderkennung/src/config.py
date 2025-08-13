@@ -23,7 +23,7 @@ HEARTBEAT_TIMEOUT = 5.0    # Sekunden, wie lange der Stream nach letztem Heartbe
 HTTP_PORT = 8080
 
 # YOLO Setup
-USE_DUMMY = False  # Auf False setzen, wenn das echte YOLO-Modell verwendet wird
+USE_DUMMY = True  # Auf False setzen, wenn das echte YOLO-Modell verwendet wird
 YOLO_MODEL_PATH = "./model/best.pt"  # z. B. "best.pt"
 
 # Ausführungsmodus

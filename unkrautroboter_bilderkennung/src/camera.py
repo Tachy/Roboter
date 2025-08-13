@@ -294,45 +294,49 @@ def stop_camera_if_idle():
         logger.error(f"Fehler beim Stoppen der Kamera: {e}")
 
 # Alte Signatur entfernt; neue Signatur unten
-def capture_image(filename: str):
-    """Nimmt ein einzelnes Bild auf. Versucht Undistortion per Kalibrierungsdatei; fällt sonst auf Rohbild zurück."""
+def capture_image(filename: str, undistort: bool = True):
+    """
+    Nimmt ein einzelnes Bild auf.
+    - undistort=True: Bild wird entzerrt (empfohlen für GETXY/EXTRINSIK).
+    - undistort=False: Bild wird roh gespeichert (empfohlen für Trainings/Testdaten).
+    """
     try:
         logger.debug("Starte Bildaufnahme...")
-        # Stelle sicher, dass die Kamera läuft
         started_here = ensure_camera_started()
         arr = picam2.capture_array()
         if arr is None:
             raise RuntimeError("capture_array lieferte None")
-        # Konvertiere 4-Kanal-Bild (RGBA) zu 3-Kanal (BGR)
+        # RGBA → BGR
         if arr.ndim == 3 and arr.shape[2] == 4:
             bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
         else:
             bgr = arr
         h, w = bgr.shape[:2]
-        # Hinweis loggen, falls Zielgröße nicht der Kalibriergröße entspricht
-        if _ensure_calibration_loaded() and _calib_img_size and (w, h) != _calib_img_size:
-            logger.info(f"Undistortion bei {w}x{h}, Kalibrierung bei {_calib_img_size} – skaliere K entsprechend.")
-        mm = _get_maps_for_size(w, h)
-        if mm is not None:
-            map1, map2 = mm
-            out = cv2.remap(bgr, map1, map2, interpolation=cv2.INTER_LINEAR)
-            # Für Web-Preview parallel in Memory als JPEG encodieren
-            _encode_and_store_last_capture(out, quality=90)
-            ok = cv2.imwrite(filename, out)
-            if not ok:
-                raise RuntimeError("cv2.imwrite fehlgeschlagen")
-            logger.info(f"Bild (undistorted) aufgenommen: {filename}")
-        else:
-            # Fallback: direkt speichern (Rohbild)
-            _encode_and_store_last_capture(bgr, quality=90)
-            ok = cv2.imwrite(filename, bgr)
-            if not ok:
-                raise RuntimeError("cv2.imwrite fehlgeschlagen (Fallback)")
-            logger.info(f"Bild (ohne Kalibrierung) aufgenommen: {filename}")
+        if undistort:
+            if _ensure_calibration_loaded() and _calib_img_size and (w, h) != _calib_img_size:
+                logger.info(f"Undistortion bei {w}x{h}, Kalibrierung bei {_calib_img_size} – skaliere K entsprechend.")
+            mm = _get_maps_for_size(w, h)
+            if mm is not None:
+                map1, map2 = mm
+                out = cv2.remap(bgr, map1, map2, interpolation=cv2.INTER_LINEAR)
+                _encode_and_store_last_capture(out, quality=90)
+                ok = cv2.imwrite(filename, out)
+                if not ok:
+                    raise RuntimeError("cv2.imwrite fehlgeschlagen")
+                logger.info(f"Bild (undistorted) aufgenommen: {filename}")
+                return filename
+            else:
+                logger.warning("Undistortion nicht möglich, speichere Rohbild.")
+        # Rohbild speichern (entweder weil undistort=False oder kein Mapping möglich)
+        _encode_and_store_last_capture(bgr, quality=90)
+        ok = cv2.imwrite(filename, bgr)
+        if not ok:
+            raise RuntimeError("cv2.imwrite fehlgeschlagen (Fallback)")
+        logger.info(f"Bild (roh) aufgenommen: {filename}")
+        return filename
     except Exception as e:
         logger.error(f"Fehler bei der Bildaufnahme: {str(e)}")
     finally:
-        # Kamera wieder stoppen, falls sie nur für dieses Bild gestartet wurde und kein Stream läuft
         try:
             if started_here and not stream_active:
                 picam2.stop()

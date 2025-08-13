@@ -6,7 +6,7 @@ import websockets
 import logging
 from . import config
 from websockets.exceptions import ConnectionClosedOK
-from . import robot_control, camera
+from . import robot_control, camera, geometry
 
 # Logger einrichten
 logger = logging.getLogger("status_ws_server")
@@ -92,7 +92,8 @@ def get_status_data():
         "cpu_load": cpu_load,
         "time": now,
         "last_capture_ts": camera.get_last_capture_timestamp(),
-        "uptime": uptime_str
+    "uptime": uptime_str,
+    "world_transform_ready": geometry.is_world_transform_ready()
     }
     # Joystick-Daten nur im Modus MANUAL mitsenden
     if status["mode"] == "MANUAL":

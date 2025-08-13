@@ -17,11 +17,11 @@ if (isset($_GET['heartbeat'])) {
 }
 
 
-// Modus setzen (AUTO, MANUAL, DISTORTION)
+// Modus setzen (AUTO, MANUAL, DISTORTION, EXTRINSIK)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mode'])) {
     $mode = strtoupper(trim($_POST['mode']));
 
-    if (!in_array($mode, ['AUTO', 'MANUAL', 'DISTORTION'])) {
+    if (!in_array($mode, ['AUTO', 'MANUAL', 'DISTORTION', 'EXTRINSIK'])) {
         http_response_code(400);
         echo "Ungültiger Modus";
         exit;

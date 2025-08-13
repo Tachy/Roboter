@@ -7,9 +7,11 @@ import time
 import logging
 import os
 import cv2
+import numpy as np
 from pathlib import Path
 from . import config, camera, serial_manager, yolo_detector, udp_server, status_ws_server
 from .calibration import CalibrationSession
+from . import geometry
 
 # Logger einrichten
 logger = logging.getLogger("robot_control")
@@ -42,7 +44,7 @@ def _load_persisted_mode():
             return None
         with open(_MODE_FILE, "r", encoding="utf-8") as f:
             val = f.read().strip().upper()
-        return val if val in {"AUTO", "MANUAL", "DISTORTION"} else None
+        return val if val in {"AUTO", "MANUAL", "DISTORTION", "EXTRINSIK"} else None
     except Exception:
         return None
 
@@ -59,7 +61,7 @@ class RobotControl:
         self.send_command(msg)
         # Persistierten Modus laden und anwenden (falls vorhanden und gültig)
         persisted = _load_persisted_mode()
-        if persisted in {"AUTO", "MANUAL", "DISTORTION"} and persisted != self.mode:
+        if persisted in {"AUTO", "MANUAL", "DISTORTION", "EXTRINSIK"} and persisted != self.mode:
             logger.info(f"Lade letzten Modus: {persisted}")
             self.set_mode(persisted)
         elif persisted is None:
@@ -75,7 +77,7 @@ class RobotControl:
             return self.mode
 
     def set_mode(self, new_mode):
-        """Setzt den Betriebsmodus (AUTO, MANUAL oder DISTORTION)."""
+        """Setzt den Betriebsmodus (AUTO, MANUAL, DISTORTION, EXTRINSIK)."""
         with self.mode_lock:
             if new_mode == self.mode:
                 return
@@ -94,6 +96,25 @@ class RobotControl:
                 except Exception as e:
                     pass
                 self.calib_session = None
+            # Beim Wechsel in EXTRINSIK: Bannerbild in Vorschau
+            try:
+                if self.mode == "EXTRINSIK" and camera.is_camera_started():
+                    arr = camera.picam2.capture_array()
+                    if arr is not None:
+                        if arr.ndim == 3 and arr.shape[2] == 4:
+                            bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+                        elif arr.ndim == 3 and arr.shape[2] == 3:
+                            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                        else:
+                            bgr = arr
+                        h, w = bgr.shape[:2]
+                        target_w = 320
+                        scale = target_w / float(w)
+                        preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+                        cv2.putText(preview, "Extrinsik: Klick zum Starten", (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
+                        camera._encode_and_store_last_capture(preview, quality=85)
+            except Exception:
+                pass
 
     def send_command(self, command):
         """Sendet ein Kommando an den Arduino."""
@@ -105,14 +126,32 @@ class RobotControl:
         if line == "GETXY":
             logger.info("<- Arduino: GETXY")
 
-            # Entzerrtes Einzelbild aufnehmen und verarbeiten
+
+            # Entzerrtes Einzelbild aufnehmen und verarbeiten (immer undistortiert für GETXY)
             filename = "frame.jpg"
-            camera.capture_image(filename)
+            camera.capture_image(filename, undistort=True)
             img_path = filename
 
             coords = yolo_detector.process_image(img_path)
+            # Falls Welttransformation verfügbar: Pixel -> Welt (mm)
+            use_world = False
+            try:
+                use_world = getattr(config, 'WORLD_TRANSFORM_ACTIVE', True) and geometry.is_world_transform_ready()
+            except Exception:
+                use_world = geometry.is_world_transform_ready()
             for x, y in coords:
-                msg = f"XY:{x:.1f},{y:.1f}"
+                if use_world:
+                    try:
+                        w = geometry.pixel_to_world(float(x), float(y))
+                        if w is not None:
+                            xw, yw = w
+                            msg = f"XY:{xw:.1f},{yw:.1f}"
+                        else:
+                            msg = f"XY:{x:.1f},{y:.1f}"
+                    except Exception:
+                        msg = f"XY:{x:.1f},{y:.1f}"
+                else:
+                    msg = f"XY:{x:.1f},{y:.1f}"
                 logger.info(f"-> Arduino: {msg}")
                 self.send_command(msg)
                 time.sleep(0.05)
@@ -147,6 +186,9 @@ class RobotControl:
         elif mode == "DISTORTION":
             # DISTORTION: zur Sicherheit an Arduino wie AUTO (d. h. keine direkten Joystick-Kommandos),
             # Button-Handling wird im UDP-Server ausgelöst
+            return True
+        elif mode == "EXTRINSIK":
+            # Keine direkten Joystick-Kommandos im EXTRINSIK-Modus; Button handled separat
             return True
         return False
 
@@ -225,6 +267,74 @@ class RobotControl:
                 self.calib_session = None
                 # Nach Abschluss: keine Software-Overlay/Undistortion im Stream
                 logger.info("[Calib] abgeschlossen. Hardware-Stream bleibt roh; Kalibrierdaten werden für Offscreen-Verarbeitung genutzt.")
+
+    def extrinsic_button_pressed(self):
+        """One-Shot-Extrinsik: im EXTRINSIK-Modus genau ein Bild auswerten und R,t speichern."""
+        if self.get_mode() != "EXTRINSIK":
+            return
+        if not camera.is_camera_started():
+            logging.info("[Extr] Klick ignoriert: Kamera/Stream nicht aktiv.")
+            return
+        # Lade Intrinsik (K,D,newK) aus Kalibrierungsdatei
+        try:
+            calib_path = Path("./calibration/cam_calib_charuco.npz")
+            if not calib_path.exists():
+                raise FileNotFoundError("Kein cam_calib_charuco.npz vorhanden.")
+            d = np.load(str(calib_path), allow_pickle=True)
+            K = d["K"].astype(float)
+            D = d["D"].astype(float)
+            newK = d.get("newK")
+            if newK is not None:
+                newK = newK.astype(float)
+        except Exception:
+            # Fehlerbanner: keine K/D
+            try:
+                arr = camera.picam2.capture_array()
+                if arr is not None:
+                    if arr.ndim == 3 and arr.shape[2] == 4:
+                        bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+                    elif arr.ndim == 3 and arr.shape[2] == 3:
+                        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                    else:
+                        bgr = arr
+                    h, w = bgr.shape[:2]
+                    target_w = 320
+                    scale = target_w / float(w)
+                    preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+                    cv2.putText(preview, "Extrinsik: Keine K/D gefunden", (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2, cv2.LINE_AA)
+                    camera._encode_and_store_last_capture(preview, quality=85)
+            except Exception:
+                pass
+            return
+
+        # Bild holen
+        try:
+            arr = camera.picam2.capture_array()
+            if arr is None:
+                raise RuntimeError("Kein Kamerabild verfügbar.")
+            if arr.ndim == 3 and arr.shape[2] == 4:
+                bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+            elif arr.ndim == 3 and arr.shape[2] == 3:
+                bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            else:
+                bgr = arr
+        except Exception:
+            return
+
+        # Extrinsik schätzen und speichern via geometry
+        ok, draw, text = geometry.compute_and_save_extrinsics_from_charuco(bgr, K, D, newK=newK)
+
+        # Preview/Banner schreiben
+        try:
+            h, w = draw.shape[:2]
+            target_w = 320
+            scale = target_w / float(w)
+            preview = cv2.resize(draw, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+            color = (0,255,0) if ok else (0,0,255)
+            cv2.putText(preview, text, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+            camera._encode_and_store_last_capture(preview, quality=85)
+        except Exception:
+            pass
 
     def get_joystick_status(self):
         with self.last_joystick_lock:

@@ -28,10 +28,9 @@ def get_next_image_number():
     return max(numbers) + 1
 
 def save_training_image():
-    """Nimmt ein Bild auf und speichert es im Trainingsverzeichnis."""
+    """Nimmt ein Bild auf und speichert es im Trainingsverzeichnis (immer raw, ohne Undistortion)."""
     logger.info("Bild speichern....")
     next_number = get_next_image_number()
     filename = os.path.join(config.TRAINING_IMAGE_DIR, f"bild_{next_number:04d}.jpg")
-    # Trainingsaufnahme: speichert entzerrt, falls Kalibrierung vorhanden
-    camera.capture_image(filename)
+    camera.capture_image(filename, undistort=False)
     logger.info(f"Bild gespeichert: {filename}")

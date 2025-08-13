@@ -117,6 +117,7 @@
                 <option value="AUTO">AUTO</option>
                 <option value="MANUAL">MANUAL</option>
                 <option value="DISTORTION">DISTORTION</option>
+                <option value="EXTRINSIK">EXTRINSIK</option>
             </select>
             
             <div id="status-box" style="margin-top:24px; width:100%; background:#222; border-radius:8px; padding:16px 12px; color:#fff; font-size:1em; min-height:70px;">
@@ -278,6 +279,14 @@
         html += `CPU-Last: <b>${typeof data.cpu_load === 'number' ? data.cpu_load + ' %' : (data.cpu_load ?? '-')}</b><br>`;
         html += `Zeit: <b>${data.time ?? '-'}</b><br>`;
         html += `Uptime: <b>${data.uptime ?? '-'}</b>`;
+        // Extrinsik-Bereitschaft anzeigen, wenn verfügbar
+        if (typeof data.world_transform_ready !== 'undefined') {
+            html += `<br>Extrinsik: <b>${data.world_transform_ready ? 'bereit' : 'nicht bereit'}</b>`;
+        }
+        // Hinweis im EXTRINSIK-Modus
+        if (data.mode === 'EXTRINSIK') {
+            html += `<br><span style="color:#9cf;">Hinweis: Im EXTRINSIK‑Modus den Joystick‑Button drücken, um die Pose zu bestimmen.</span>`;
+        }
         // Joystick nur im Modus MANUAL anzeigen
         if (data.mode === 'MANUAL' && data.joystick && typeof data.joystick.x === 'number' && typeof data.joystick.y === 'number') {
             html += `<br><br>Joystick X: <b>${data.joystick.x}</b> &nbsp; Y: <b>${data.joystick.y}</b>`;
