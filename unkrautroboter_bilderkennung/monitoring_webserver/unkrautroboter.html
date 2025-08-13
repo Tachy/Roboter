@@ -162,6 +162,8 @@
     const STREAM_URL = 'http://192.168.179.252:8080/stream';
     let streamInitialized = false;
     let streamRetryTimer = null;
+    let streamWatchdogTimer = null;
+    let lastStreamLoadTs = 0;
 
     function ensureStream(active) {
         const img = document.getElementById('stream-img');
@@ -174,17 +176,22 @@
                 // Handler setzen (einmalig sinnvoll)
                 img.onload = function() {
                     placeholder.style.display = 'none';
+                    lastStreamLoadTs = Date.now();
+                    // Erst jetzt als initialisiert markieren
+                    streamInitialized = true;
                 };
                 img.onerror = function() {
                     placeholder.style.display = 'flex';
+                    // Bei Fehler erneut initialisieren erlauben
+                    streamInitialized = false;
                     // Backoff-Retry nach 2s, mit einmaligem Cache-Buster
                     if (streamRetryTimer) clearTimeout(streamRetryTimer);
                     streamRetryTimer = setTimeout(() => {
                         img.src = STREAM_URL + '?r=' + Date.now();
                     }, 2000);
                 };
+                // Quelle setzen, Request anstoßen
                 img.src = STREAM_URL;
-                streamInitialized = true;
             }
         } else {
             // Deaktivieren: Verbindung schließen und Platzhalter anzeigen
@@ -195,6 +202,30 @@
             img.removeAttribute('src');
             placeholder.style.display = 'flex';
             streamInitialized = false;
+        }
+    }
+
+    // Watchdog: stößt bei aktivem Stream regelmäßig einen Reload an, falls Platzhalter sichtbar ist oder lange kein Load-Event kam
+    function startStreamWatchdog() {
+        if (streamWatchdogTimer) return;
+        streamWatchdogTimer = setInterval(() => {
+            const placeholder = document.getElementById('stream-placeholder');
+            const img = document.getElementById('stream-img');
+            if (!img || !placeholder) return;
+            // Nur wenn Stream laut Status aktiv ist
+            // Neu anstoßen NUR wenn Platzhalter sichtbar ist oder keine Quelle gesetzt ist
+            const placeholderVisible = placeholder.style.display !== 'none';
+            if (placeholderVisible || !img.src) {
+                // src zuerst entfernen, dann mit Cache-Buster neu setzen, um den Browser zu einem echten neuen Request zu zwingen
+                img.removeAttribute('src');
+                setTimeout(() => { img.src = STREAM_URL + '?r=' + Date.now(); }, 50);
+            }
+        }, 3000);
+    }
+    function stopStreamWatchdog() {
+        if (streamWatchdogTimer) {
+            clearInterval(streamWatchdogTimer);
+            streamWatchdogTimer = null;
         }
     }
 
@@ -236,7 +267,7 @@
         if (data.mode === 'MANUAL' && data.joystick && typeof data.joystick.x === 'number' && typeof data.joystick.y === 'number') {
             html += `<br><br>Joystick X: <b>${data.joystick.x}</b> &nbsp; Y: <b>${data.joystick.y}</b>`;
         }
-    el.innerHTML = html;
+        el.innerHTML = html;
 
         // Modus in der Selectionbox setzen, falls vorhanden
         if (data && data.mode) {
@@ -281,21 +312,50 @@
 
         // Stream entsprechend Server-Status (an/aus) verwalten
         if (typeof data.stream !== 'undefined') {
-            ensureStream(!!data.stream);
+            const active = !!data.stream;
+            ensureStream(active);
+            if (active) startStreamWatchdog(); else stopStreamWatchdog();
         }
     }
 
+    // Robuste WebSocket-Verbindung mit Backoff und ohne Mehrfach-Verbindungen
+    let ws = null;
+    let wsReconnectDelayMs = 1000; // beginnt bei 1s
+    let wsReconnectTimer = null;
+
+    function scheduleWsReconnect() {
+        if (wsReconnectTimer) return; // bereits geplant
+        wsReconnectTimer = setTimeout(() => {
+            wsReconnectTimer = null;
+            startStatusWebSocket();
+        }, wsReconnectDelayMs);
+        // Exponentielles Backoff bis max. 15s
+        wsReconnectDelayMs = Math.min(Math.floor(wsReconnectDelayMs * 1.7), 15000);
+    }
+
     function startStatusWebSocket() {
+        // Laufende Verbindung nicht duplizieren
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
         let wsProto = (location.protocol === 'https:') ? 'wss' : 'ws';
         let wsUrl = wsProto + '://192.168.179.252:8765'; // Pi-IP explizit
-        let ws = new WebSocket(wsUrl);
+        try {
+            ws = new WebSocket(wsUrl);
+        } catch (e) {
+            updateStatusBox(null);
+            scheduleWsReconnect();
+            return;
+        }
         ws.onopen = () => {
+            // Reset Backoff
+            wsReconnectDelayMs = 1000;
+            if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
             updateStatusBox({mode:'-',stream:false,cpu_temp:null,timestamp:null});
         };
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                // console.log('[WS-Status empfangen]', data);
                 updateStatusBox(data);
             } catch (e) {
                 updateStatusBox(null);
@@ -303,17 +363,28 @@
         };
         ws.onerror = () => {
             updateStatusBox(null);
+            scheduleWsReconnect();
         };
         ws.onclose = () => {
             updateStatusBox(null);
-            setTimeout(startStatusWebSocket, 2000); // reconnect
+            scheduleWsReconnect();
         };
     }
 
+    // Aufräumen beim Verlassen der Seite
+    window.addEventListener('beforeunload', () => {
+        if (ws) {
+            try { ws.close(); } catch (_) {}
+        }
+        if (wsReconnectTimer) {
+            clearTimeout(wsReconnectTimer);
+            wsReconnectTimer = null;
+        }
+    });
+
     window.addEventListener('load', () => {
         startStatusWebSocket();
-        // Versuche initial zu verbinden; wird durch WS-Status überschrieben
-        ensureStream(true);
+        // Stream und Watchdog werden erst nach erstem gültigen Status aktiviert
     });
     </script>
 </body>

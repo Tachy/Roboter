@@ -113,7 +113,14 @@ class CalibrationSession:
         arr = camera.picam2.capture_array()
         if arr is None:
             return False, (0, 0)
-        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR) if arr.ndim == 3 and arr.shape[2] == 3 else arr
+        # Korrekte Farbumwandlung: RGBA -> BGR, sonst unverändert
+        if arr.ndim == 3 and arr.shape[2] == 4:
+            bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+        elif arr.ndim == 3 and arr.shape[2] == 3:
+            # Einige Setups liefern RGB – hier ggf. in BGR wandeln; wenn Farben vertauscht wirken, weglassen
+            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        else:
+            bgr = arr
         ch_corners, ch_ids, mk_corners, mk_ids, counts = self._detect_on_frame(bgr)
         # speichern
         if ch_corners is not None and ch_ids is not None:
@@ -122,7 +129,20 @@ class CalibrationSession:
             self.marker_snapshots.append((mk_corners, mk_ids, self.board))
         else:
             self.marker_snapshots.append((mk_corners, mk_ids, self.board))
+        # Zähler hoch
         self.snapshots += 1
+
+        # Mini-Vorschau mit Hinweis "Aufnahme X/Y" an Webserver schicken
+        try:
+            h, w = bgr.shape[:2]
+            target_w = 320
+            scale = target_w / float(w)
+            preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+            text = f"Aufnahme {self.snapshots}/{self.target}"
+            cv2.putText(preview, text, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
+            camera._encode_and_store_last_capture(preview, quality=85)
+        except Exception:
+            pass
         return True, counts
 
     def finalize(self):
@@ -130,7 +150,12 @@ class CalibrationSession:
         arr = camera.picam2.capture_array()
         if arr is None:
             raise RuntimeError("Kein Kamerabild verfügbar für Finalisierung.")
-        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR) if arr.ndim == 3 and arr.shape[2] == 3 else arr
+        if arr.ndim == 3 and arr.shape[2] == 4:
+            bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+        elif arr.ndim == 3 and arr.shape[2] == 3:
+            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        else:
+            bgr = arr
         h, w = bgr.shape[:2]
         img_size = (w, h)
         ret, K, D = calibrate_from_accum(self.marker_snapshots, self.all_ch_corners, self.all_ch_ids, img_size, self.board)

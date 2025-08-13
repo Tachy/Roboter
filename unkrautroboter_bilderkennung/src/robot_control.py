@@ -6,6 +6,7 @@ import threading
 import time
 import logging
 import os
+import cv2
 from pathlib import Path
 from . import config, camera, serial_manager, yolo_detector, udp_server, status_ws_server
 from .calibration import CalibrationSession
@@ -157,25 +158,62 @@ class RobotControl:
             # Erster Klick: Kalibriervorgang starten, aber noch kein Snapshot
             self.calib_session = CalibrationSession(target_snapshots=20)
             logger.info("[Calib] Kalibriervorgang gestartet. Nächster Klick nimmt das erste Bild auf.")
+            # Bannerbild "Klick zum Starten" als letzte Aufnahme veröffentlichen (Größe wie "Aufnahme X/Y")
+            try:
+                arr = camera.picam2.capture_array()
+                if arr is not None:
+                    if arr.ndim == 3 and arr.shape[2] == 4:
+                        bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+                    elif arr.ndim == 3 and arr.shape[2] == 3:
+                        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                    else:
+                        bgr = arr
+                    h, w = bgr.shape[:2]
+                    target_w = 320
+                    scale = target_w / float(w)
+                    preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+                    cv2.putText(preview, "Kalibrierung: Klick zum Starten", (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+                    camera._encode_and_store_last_capture(preview, quality=85)
+            except Exception:
+                pass
             return
         # Ab hier: Session existiert -> Snapshots sammeln
         ok, counts = self.calib_session.capture_snapshot()
-        if ok:
-            logger.info(f"[Calib] Snapshot {self.calib_session.snapshots}/{self.calib_session.target} (Marker {counts[0]}, Charuco {counts[1]})")
-            if self.calib_session.snapshots >= self.calib_session.target:
+        if not ok:
+            return
+        logger.info(f"[Calib] Snapshot {self.calib_session.snapshots}/{self.calib_session.target} (Marker {counts[0]}, Charuco {counts[1]})")
+        if self.calib_session.snapshots >= self.calib_session.target:
+            try:
+                out_file, err = self.calib_session.finalize()
+                logger.info(f"[Calib] gespeichert: {out_file} (reproj_err={err:.4f})")
+                # Abschlussbanner zeigen (Größe wie "Aufnahme X/Y")
                 try:
-                    out_file, err = self.calib_session.finalize()
-                    logger.info(f"[Calib] gespeichert: {out_file} (reproj_err={err:.4f})")
-                except Exception as e:
-                    logger.error(f"[Calib] Fehler bei Finalisierung: {e}")
-                finally:
-                    try:
-                        self.calib_session.stop()
-                    except Exception:
-                        pass
-                    self.calib_session = None
-                    # Nach Abschluss: keine Software-Overlay/Undistortion im Stream
-                    logger.info("[Calib] abgeschlossen. Hardware-Stream bleibt roh; Kalibrierdaten werden für Offscreen-Verarbeitung genutzt.")
+                    arr = camera.picam2.capture_array()
+                    if arr is not None:
+                        if arr.ndim == 3 and arr.shape[2] == 4:
+                            bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+                        elif arr.ndim == 3 and arr.shape[2] == 3:
+                            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                        else:
+                            bgr = arr
+                        h, w = bgr.shape[:2]
+                        target_w = 320
+                        scale = target_w / float(w)
+                        preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+                        cv2.putText(preview, "Kalibrierung abgeschlossen", (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
+                        camera._encode_and_store_last_capture(preview, quality=85)
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"[Calib] Fehler bei Finalisierung: {e}")
+            finally:
+                try:
+                    self.calib_session.stop()
+                except Exception:
+                    pass
+                self.calib_session = None
+                # Nach Abschluss: keine Software-Overlay/Undistortion im Stream
+                logger.info("[Calib] abgeschlossen. Hardware-Stream bleibt roh; Kalibrierdaten werden für Offscreen-Verarbeitung genutzt.")
 
     def get_joystick_status(self):
         with self.last_joystick_lock:
