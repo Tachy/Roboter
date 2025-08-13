@@ -281,20 +281,12 @@ def capture_image(filename: str):
             logger.debug("Starte Kamera...")
             picam2.start()
             time.sleep(0.5)
-        # Array aufnehmen (RGB oder BGR, je nach Picamera2-Version)
         arr = picam2.capture_array()
         if arr is None:
             raise RuntimeError("capture_array lieferte None")
-        # Auto-detect color order: if mean R > mean B, assume RGB; else BGR
-        if arr.ndim == 3 and arr.shape[2] == 3:
-            mean0 = float(np.mean(arr[:,:,0]))
-            mean2 = float(np.mean(arr[:,:,2]))
-            if mean2 > mean0:
-                logger.debug(f"Detected RGB input (meanR={mean2:.1f} > meanB={mean0:.1f}), converting to BGR.")
-                bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-            else:
-                logger.debug(f"Detected BGR input (meanB={mean0:.1f} >= meanR={mean2:.1f}), using as-is.")
-                bgr = arr
+        # Konvertiere 4-Kanal-Bild (RGBA) zu 3-Kanal (BGR)
+        if arr.ndim == 3 and arr.shape[2] == 4:
+            bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
         else:
             bgr = arr
         h, w = bgr.shape[:2]

@@ -127,6 +127,7 @@
             <div id="last-capture-box" style="margin-top:16px; width:100%; background:#222; border-radius:8px; padding:10px; color:#fff;">
                 <div style="font-weight:bold; margin-bottom:6px;">Letzte Aufnahme</div>
                 <img id="last-capture-img" src="" alt="Letzte Aufnahme" style="width:100%; max-width:260px; height:auto; border:1px solid #333; border-radius:6px; background:#111; display:none;" />
+                <div id="last-capture-time" style="margin:6px 0 0 0; color:#ccc; font-size:0.95em;">Letzte Aufnahme: –</div>
                 <div id="last-capture-empty" style="color:#aaa;">Noch keine Aufnahme</div>
             </div>
         </div>
@@ -248,6 +249,7 @@
 
         // Letzte Aufnahme aktualisieren, wenn es einen neuen Zeitstempel gibt
         const tsRaw = data.last_capture_ts;
+        const timeDiv = document.getElementById('last-capture-time');
         if (tsRaw !== null && tsRaw !== undefined) {
             const img = document.getElementById('last-capture-img');
             const empty = document.getElementById('last-capture-empty');
@@ -262,7 +264,19 @@
                     // Optionales Debugging:
                     // console.debug('Preview aktualisiert, ts=', ts);
                 }
+                // Zeit anzeigen
+                if (timeDiv) {
+                    const d = new Date(ts * 1000);
+                    const hh = d.getHours().toString().padStart(2, '0');
+                    const mm = d.getMinutes().toString().padStart(2, '0');
+                    const ss = d.getSeconds().toString().padStart(2, '0');
+                    timeDiv.textContent = `Uhrzeit: ${hh}:${mm}:${ss}`;
+                }
+            } else if (timeDiv) {
+                timeDiv.textContent = '–';
             }
+        } else if (timeDiv) {
+            timeDiv.textContent = '–';
         }
 
         // Stream entsprechend Server-Status (an/aus) verwalten
