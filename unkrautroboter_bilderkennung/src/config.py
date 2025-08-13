@@ -19,6 +19,11 @@ UDP_HEARTBEAT_PORT = 5007  # Port für Heartbeat-Messages
 UDP_STATUS_BROADCAST_PORT = 5008  # Port für Status-Broadcast
 HEARTBEAT_TIMEOUT = 5.0    # Sekunden, wie lange der Stream nach letztem Heartbeat läuft
 
+# Optionale Whitelist für UDP-Steuerung/Joystick (Absender-IP-Adressen oder CIDR-Netze)
+# Beispiel: ALLOWED_UDP_SOURCES = ["192.168.179.10", "192.168.179.0/24"]
+# Leer lassen, um alle Quellen zu erlauben.
+ALLOWED_UDP_SOURCES = ["192.168.179.17", "192.168.179.186"]
+
 # HTTP Server Setup
 HTTP_PORT = 8080
 

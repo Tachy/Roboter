@@ -3,6 +3,7 @@ Modul für die UDP-Server-Funktionalität des Unkrautroboters.
 """
 
 import socket
+import ipaddress
 import threading
 import time
 import logging
@@ -21,6 +22,29 @@ if not logging.getLogger().hasHandlers():
 # Callback-Funktionen, die von außen gesetzt werden
 on_mode_change = None
 on_command = None
+def _is_source_allowed(src_ip_str: str) -> bool:
+    """Prüft, ob eine Absender-IP gemäß ALLOWED_UDP_SOURCES zugelassen ist.
+    Erlaubt einzelne IPs und CIDR-Netze. Bei leerer Liste: alles erlaubt.
+    Fehler beim Parsen führen nicht zur Ablehnung (fail-open, wie zuvor)."""
+    try:
+        if not getattr(config, 'ALLOWED_UDP_SOURCES', None):
+            return True
+        src_ip = ipaddress.ip_address(src_ip_str)
+        for entry in config.ALLOWED_UDP_SOURCES:
+            try:
+                if '/' in entry:
+                    net = ipaddress.ip_network(entry, strict=False)
+                    if src_ip in net:
+                        return True
+                else:
+                    if src_ip == ipaddress.ip_address(entry):
+                        return True
+            except Exception:
+                continue
+        return False
+    except Exception:
+        return True
+
 
 
 _last_heartbeat = 0
@@ -39,6 +63,10 @@ def start_control_server():
     while True:
         data, addr = sock.recvfrom(1024)
         command = data.decode().strip().upper()
+        # Quell-IP prüfen
+        if not _is_source_allowed(addr[0]):
+            logger.warning(f"Verwerfe Steuer-Befehl von nicht erlaubter Quelle: {addr[0]}")
+            continue
         if command in ["AUTO", "MANUAL", "DISTORTION", "EXTRINSIK"]:
             if on_mode_change:
                 on_mode_change(command)
@@ -54,6 +82,10 @@ def start_joystick_server():
     
     while True:
         data, addr = sock.recvfrom(1024)
+        # Quell-IP prüfen
+        if not _is_source_allowed(addr[0]):
+            logger.warning(f"Verwerfe Joystick-Befehl von nicht erlaubter Quelle: {addr[0]}")
+            continue
         command = data.decode().strip()
         if on_command:
             handled = on_command(command)
