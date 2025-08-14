@@ -9,11 +9,11 @@ import cv2
 from . import camera
 
 # Board-Konfiguration (wie im Standalone-Skript)
-SQUARES_X = 5
-SQUARES_Y = 7
+SQUARES_X = 13
+SQUARES_Y = 13
 SQUARE_MM = 40.0
 MARKER_MM = 30.0
-DICT_NAME = "DICT_4X4_50"
+DICT_NAME = "DICT_4X4_250"
 
 OUT_DIR = Path("./calibration")
 OUT_DIR.mkdir(parents=True, exist_ok=True)

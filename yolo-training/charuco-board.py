@@ -4,12 +4,12 @@ from reportlab.pdfgen import canvas # type: ignore
 from reportlab.lib.units import mm # type: ignore
 
 # Board-Parameter
-squaresX, squaresY = 5, 7
+squaresX, squaresY = 13, 13
 squareLength_mm, markerLength_mm = 40, 30
 dpi = 300
 
 # ArUco-Dictionary
-dict_aruco = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
+dict_aruco = aruco.getPredefinedDictionary(aruco.DICT_4X4_250)
 
 # Charuco-Board (alte API)
 board = aruco.CharucoBoard(
