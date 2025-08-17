@@ -9,7 +9,7 @@ import os
 import cv2
 import numpy as np
 from pathlib import Path
-from . import config, camera, serial_manager, yolo_detector, udp_server, status_ws_server
+from . import config, camera, serial_manager, yolo_detector, udp_server, status_ws_server, status_bus
 from .calibration import CalibrationSession
 from . import geometry
 
@@ -111,8 +111,42 @@ class RobotControl:
                         target_w = 320
                         scale = target_w / float(w)
                         preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
-                        cv2.putText(preview, "Extrinsik: Klick zum Starten", (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
+                        text = "Extrinsik: Klick zum Starten"
+                        try:
+                            status_bus.set_message(text)
+                        except Exception:
+                            pass
                         camera._encode_and_store_last_capture(preview, quality=85)
+                # Beim Wechsel in DISTORTION: Erste Phase ohne Klick starten und Status setzen
+                if self.mode == "DISTORTION":
+                    # Kalibriersession anlegen
+                    try:
+                        self.calib_session = CalibrationSession(target_snapshots=20)
+                    except Exception:
+                        self.calib_session = None
+                    # Statusmeldung sofort anzeigen
+                    try:
+                        status_bus.set_message("Kalibrierung: Klick zum Starten")
+                    except Exception:
+                        pass
+                    # Optional: aktuelle Vorschau ohne Overlay speichern
+                    try:
+                        if camera.is_camera_started():
+                            arr = camera.picam2.capture_array()
+                            if arr is not None:
+                                if arr.ndim == 3 and arr.shape[2] == 4:
+                                    bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+                                elif arr.ndim == 3 and arr.shape[2] == 3:
+                                    bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                                else:
+                                    bgr = arr
+                                h, w = bgr.shape[:2]
+                                target_w = 320
+                                scale = target_w / float(w)
+                                preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+                                camera._encode_and_store_last_capture(preview, quality=85)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -221,7 +255,11 @@ class RobotControl:
                     target_w = 320
                     scale = target_w / float(w)
                     preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
-                    cv2.putText(preview, "Kalibrierung: Klick zum Starten", (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+                    text = "Kalibrierung: Klick zum Starten"
+                    try:
+                        status_bus.set_message(text)
+                    except Exception:
+                        pass
                     camera._encode_and_store_last_capture(preview, quality=85)
             except Exception:
                 pass
@@ -251,7 +289,11 @@ class RobotControl:
                         target_w = 320
                         scale = target_w / float(w)
                         preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
-                        cv2.putText(preview, "Kalibrierung abgeschlossen", (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
+                        text2 = "Kalibrierung abgeschlossen"
+                        try:
+                            status_bus.set_message(text2)
+                        except Exception:
+                            pass
                         camera._encode_and_store_last_capture(preview, quality=85)
                 except Exception:
                     pass
@@ -301,7 +343,11 @@ class RobotControl:
                     target_w = 320
                     scale = target_w / float(w)
                     preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
-                    cv2.putText(preview, "Extrinsik: Keine K/D gefunden", (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2, cv2.LINE_AA)
+                    text3 = "Extrinsik: Keine K/D gefunden"
+                    try:
+                        status_bus.set_message(text3)
+                    except Exception:
+                        pass
                     camera._encode_and_store_last_capture(preview, quality=85)
             except Exception:
                 pass
@@ -331,7 +377,10 @@ class RobotControl:
             scale = target_w / float(w)
             preview = cv2.resize(draw, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
             color = (0,255,0) if ok else (0,0,255)
-            cv2.putText(preview, text, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+            try:
+                status_bus.set_message(text)
+            except Exception:
+                pass
             camera._encode_and_store_last_capture(preview, quality=85)
         except Exception:
             pass

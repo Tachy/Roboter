@@ -6,7 +6,7 @@ import websockets
 import logging
 from . import config
 from websockets.exceptions import ConnectionClosedOK
-from . import robot_control, camera, geometry
+from . import robot_control, camera, geometry, status_bus
 
 # Logger einrichten
 logger = logging.getLogger("status_ws_server")
@@ -122,6 +122,7 @@ def get_status_data():
         "uptime": uptime_str,
         "world_transform_ready": geometry.is_world_transform_ready(),
         "wifi": get_wifi_status(),
+        "message": status_bus.get_message(),
     }
     # Joystick-Daten nur im Modus MANUAL mitsenden
     if status["mode"] == "MANUAL":
@@ -134,19 +135,27 @@ def get_status_data():
 
 async def status_broadcast(websocket):
     try:
-        # Reagiere schnell auf neue Aufnahmen: sende sofort, wenn last_capture_ts sich ändert
+        # Reagiere schnell auf neue Aufnahmen oder Statusmeldungen und sende sofort
         last_ts = camera.get_last_capture_timestamp()
+        last_msg_ts = 0.0
         heartbeat_interval = 1.0
         quick_checks = 10  # 10 * 0.1s = 1s
         while True:
-            # Schnelle Checks für neue Aufnahmen
             sent_on_change = False
             for _ in range(quick_checks):
                 curr_ts = camera.get_last_capture_timestamp()
+                msg_info = status_bus.get_message_info()
+                curr_msg_ts = msg_info.get("ts", 0.0) if isinstance(msg_info, dict) else 0.0
                 if curr_ts != last_ts and curr_ts is not None:
                     status = get_status_data()
                     await websocket.send(json.dumps(status))
                     last_ts = curr_ts
+                    sent_on_change = True
+                    break
+                if curr_msg_ts and curr_msg_ts != last_msg_ts:
+                    status = get_status_data()
+                    await websocket.send(json.dumps(status))
+                    last_msg_ts = curr_msg_ts
                     sent_on_change = True
                     break
                 await asyncio.sleep(heartbeat_interval / quick_checks)

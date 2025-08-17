@@ -6,7 +6,7 @@ Sammelt per Joystick-Button Snapshots (ohne Overlay im Live-Stream).
 from pathlib import Path
 import numpy as np
 import cv2
-from . import camera
+from . import camera, status_bus
 
 # Board-Konfiguration (wie im Standalone-Skript)
 SQUARES_X = 13
@@ -139,8 +139,11 @@ class CalibrationSession:
             scale = target_w / float(w)
             preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
             text = f"Aufnahme {self.snapshots}/{self.target}"
-            cv2.putText(preview, text, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
             camera._encode_and_store_last_capture(preview, quality=85)
+            try:
+                status_bus.set_message(text)
+            except Exception:
+                pass
         except Exception:
             pass
         return True, counts

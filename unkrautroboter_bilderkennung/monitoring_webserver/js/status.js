@@ -28,6 +28,9 @@ function updateStatusBox(data) {
     }
     if (typeof data.world_transform_ready !== 'undefined') {
         html += `<br>Extrinsik: <b>${data.world_transform_ready ? 'bereit' : 'nicht bereit'}</b>`;
+        if (data.message && (data.mode === 'EXTRINSIK' || data.mode === 'DISTORTION')) {
+            html += `<br><span style="color:#9cf;">${data.message}</span>`;
+        }
     }
     if (data.mode === 'MANUAL' && data.joystick && typeof data.joystick.x === 'number' && typeof data.joystick.y === 'number') {
         html += `<br><br>Joystick X: <b>${data.joystick.x}</b> &nbsp; Y: <b>${data.joystick.y}</b>`;
