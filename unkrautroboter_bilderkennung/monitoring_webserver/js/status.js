@@ -22,6 +22,10 @@ function updateStatusBox(data) {
     html += `CPU-Last: <b>${typeof data.cpu_load === 'number' ? data.cpu_load + ' %' : (data.cpu_load ?? '-')}</b><br>`;
     html += `Zeit: <b>${data.time ?? '-'}</b><br>`;
     html += `Uptime: <b>${data.uptime ?? '-'}</b>`;
+    if (data.wifi) {
+        const pct = (typeof data.wifi.signal_pct === 'number') ? `${data.wifi.signal_pct}%` : '-';
+        html += `<br>WLAN: <b>${pct}</b>`;
+    }
     if (typeof data.world_transform_ready !== 'undefined') {
         html += `<br>Extrinsik: <b>${data.world_transform_ready ? 'bereit' : 'nicht bereit'}</b>`;
     }

@@ -21,6 +21,33 @@ WS_STATUS_PORT = 8765  # WebSocket-Port für Statusdaten
 
 # Funktion zum Sammeln der Statusdaten (wie im udp_server)
 def get_status_data():
+    # WLAN-Status (RSSI) aus /proc/net/wireless lesen
+    def get_wifi_status():
+        try:
+            with open("/proc/net/wireless", "r") as f:
+                lines = f.readlines()
+            # Überspringe die ersten 2 Header-Zeilen, suche erste Interface-Zeile
+            for line in lines[2:]:
+                line = line.strip()
+                if not line or ":" not in line:
+                    continue
+                iface, rest = line.split(":", 1)
+                iface = iface.strip()
+                parts = rest.split()
+                # Erwartetes Format (Beispiel):
+                # Inter-| sta ...
+                #  wlan0: 0000   64.  -45.  -256        ...
+                # parts[0]=status, parts[1]=link, parts[2]=level(dBm), parts[3]=noise
+                if len(parts) >= 3:
+                    rssi_dbm = float(parts[2])
+                    pct = max(0, min(100, round(2 * (rssi_dbm + 90))))
+                    return {
+                        "signal_pct": pct,
+                    }
+            # Keine Interface-Zeile gefunden
+            return {"signal_pct": None}
+        except Exception:
+            return {"signal_pct": None}
     # CPU-Last berechnen (Prozent, 1 Sekunde Mittelwert)
     def get_cpu_load():
         try:
@@ -92,8 +119,9 @@ def get_status_data():
         "cpu_load": cpu_load,
         "time": now,
         "last_capture_ts": camera.get_last_capture_timestamp(),
-    "uptime": uptime_str,
-    "world_transform_ready": geometry.is_world_transform_ready()
+        "uptime": uptime_str,
+        "world_transform_ready": geometry.is_world_transform_ready(),
+        "wifi": get_wifi_status(),
     }
     # Joystick-Daten nur im Modus MANUAL mitsenden
     if status["mode"] == "MANUAL":
