@@ -16,6 +16,41 @@ if (isset($_GET['heartbeat'])) {
     exit;
 }
 
+// Virtuelles Joystick-Forwarding (POST): x,y in -100..100, optional button=1
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['joy'])) {
+    $x = isset($_POST['x']) ? intval($_POST['x']) : 0;
+    $y = isset($_POST['y']) ? intval($_POST['y']) : 0;
+    $button = (isset($_POST['button']) && intval($_POST['button']) === 1) ? true : false;
+
+    // Clamp to -100..100
+    $x = max(-100, min(100, $x));
+    $y = max(-100, min(100, $y));
+
+    $udpHost = "192.168.179.252"; // IP des Raspberry Pi
+    $udpPort = 5006; // Joystick-Port
+
+    $socket = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+    if (!$socket) {
+        http_response_code(500);
+        echo "Fehler beim Erstellen des Sockets";
+        exit;
+    }
+
+    $msg = "JOYSTICK:X={$x},Y={$y}";
+    if ($button) { $msg .= ",BUTTON:1"; }
+
+    $sent = socket_sendto($socket, $msg, strlen($msg), 0, $udpHost, $udpPort);
+    socket_close($socket);
+
+    if ($sent === false) {
+        http_response_code(500);
+        echo "Fehler beim Senden der Nachricht";
+    } else {
+        echo "OK";
+    }
+    exit;
+}
+
 
 // Modus setzen (AUTO, MANUAL, DISTORTION, EXTRINSIK)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mode'])) {

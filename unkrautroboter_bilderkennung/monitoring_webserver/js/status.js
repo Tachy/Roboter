@@ -40,6 +40,9 @@ function updateStatusBox(data) {
     if (data && data.mode) {
         const modeSelect = document.getElementById('mode');
         if (modeSelect && modeSelect.value !== data.mode) modeSelect.value = data.mode;
+        if (typeof window.__setJoypadMode === 'function') {
+            window.__setJoypadMode(data.mode);
+        }
     }
 
     const tsRaw = data.last_capture_ts;
