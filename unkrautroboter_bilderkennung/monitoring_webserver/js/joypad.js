@@ -18,7 +18,13 @@
     // Called by status.js when mode changes
     window.__setJoypadMode = function (mode) {
         modeIsManual = (mode === 'MANUAL');
-        ui.style.display = modeIsManual ? 'block' : 'none';
+        const buttonOnly = (mode === 'DISTORTION' || mode === 'EXTRINSIK');
+        // Show UI for MANUAL and for button-only modes; hide in AUTO
+        ui.style.display = (modeIsManual || buttonOnly) ? 'block' : 'none';
+        // Show pad only in MANUAL
+        pad.style.display = modeIsManual ? 'block' : 'none';
+        // Always show the button when UI is visible
+        btn.style.display = (modeIsManual || buttonOnly) ? 'block' : 'none';
         if (!modeIsManual) centerStick();
     };
 
@@ -133,7 +139,12 @@
 
     // Helper: perform one send
     async function doSend(forceButton = false) {
-        const { vx: svx, vy: svy } = vectorFromDom();
+        // If pad is hidden (button-only modes), default to centered 0/0
+        let svx = 0, svy = 0;
+        if (pad.clientWidth >= 10 && pad.clientHeight >= 10) {
+            const v = vectorFromDom();
+            svx = v.vx; svy = v.vy;
+        }
         const form = new URLSearchParams();
         form.set('joy', '1');
         form.set('x', String(svx));
@@ -145,7 +156,6 @@
 
     // Separate capture button: send immediately with BUTTON:1
     btn.addEventListener('click', (e) => {
-        if (!modeIsManual) return;
         e.stopPropagation();
         doSend(true).catch(() => { });
     });
