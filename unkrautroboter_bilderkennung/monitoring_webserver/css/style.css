@@ -87,17 +87,38 @@ body {
   position: relative;
 }
 
+/* Crosshair through 0/0 reaching to the edges */
+#joypad::before, #joypad::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  z-index: 1;
+}
+#joypad::before { /* vertical line */
+  top: 0; bottom: 0;
+  left: 50%;
+  width: 0;
+  border-left: 1px dashed rgba(200,200,255,0.35);
+}
+#joypad::after { /* horizontal line */
+  left: 0; right: 0;
+  top: 50%;
+  height: 0;
+  border-top: 1px dashed rgba(200,200,255,0.35);
+}
+
 #joypad .stick {
   position: absolute;
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: rgba(200,200,255,0.9);
-  border: 2px solid #99f;
+  background: rgba(71, 71, 71, 0.7);
+  border: 2px solid rgb(99, 99, 99);
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
   pointer-events: none; /* moved by code; interactions handled on container */
+  z-index: 2; /* above crosshair */
 }
 
 #joybtn {

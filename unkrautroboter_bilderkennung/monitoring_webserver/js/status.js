@@ -43,6 +43,10 @@ function updateStatusBox(data) {
         if (typeof window.__setJoypadMode === 'function') {
             window.__setJoypadMode(data.mode);
         }
+        const resetBox = document.getElementById('reset-box');
+        if (resetBox) {
+            resetBox.style.display = (data.mode === 'MANUAL') ? 'block' : 'none';
+        }
     }
 
     const tsRaw = data.last_capture_ts;
