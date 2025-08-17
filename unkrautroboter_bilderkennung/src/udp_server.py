@@ -3,6 +3,7 @@ Modul für die UDP-Server-Funktionalität des Unkrautroboters.
 """
 
 import socket
+import subprocess
 import ipaddress
 import threading
 import time
@@ -71,6 +72,13 @@ def start_control_server():
             if on_mode_change:
                 on_mode_change(command)
                 logger.info(f"Modus auf {command} geändert (von {addr})")
+        elif command in ["RESET", "RESTART"]:
+            logger.warning(f"RESET empfangen (von {addr}) – starte roboter.service neu...")
+            try:
+                # Nicht blockierend neu starten; -n erzwingt nicht-interaktiv (erfordert passende sudoers-Regel)
+                subprocess.Popen(["sudo", "-n", "systemctl", "restart", "roboter.service"])  # noqa: S603,S607
+            except Exception as e:
+                logger.error(f"Fehler beim Neustart: {e}")
         else:
             logger.warning(f"Unbekannter Befehl: {command} (von {addr})")
 

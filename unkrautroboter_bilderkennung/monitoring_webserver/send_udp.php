@@ -16,6 +16,23 @@ if (isset($_GET['heartbeat'])) {
     exit;
 }
 
+// Neustart anstoßen: ?reset=1 per GET – sendet UDP "RESET" an den Pi
+if (isset($_GET['reset'])) {
+    $udpHost = "192.168.179.252"; // IP-Adresse des Raspberry Pi
+    $udpPort = 5005; // Steuer-Port
+    $socket = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+    if ($socket) {
+    $msg = "RESET"; // einheitlicher Steuerbefehl
+        socket_sendto($socket, $msg, strlen($msg), 0, $udpHost, $udpPort);
+        socket_close($socket);
+        echo "OK";
+    } else {
+        http_response_code(500);
+        echo "Fehler beim Erstellen des Sockets";
+    }
+    exit;
+}
+
 // Virtuelles Joystick-Forwarding (POST): x,y in -100..100, optional button=1
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['joy'])) {
     $x = isset($_POST['x']) ? intval($_POST['x']) : 0;
