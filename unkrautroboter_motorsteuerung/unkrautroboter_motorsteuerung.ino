@@ -47,7 +47,7 @@ Mode currentMode = WAITING_FOR_START;  // Startet im Wartezustand
 #define END_Z_O 31
 
 // Arduino-Pins Bürstenmotor
-#define PWM_BRUSH 6
+#define PWM_BRUSH 44
 #define ENCODER_BRUSH_A 24
 #define ENCODER_BRUSH_B 25
 
@@ -84,6 +84,42 @@ float aktuelleY_mm = 0;
 
 volatile long encoderBrush = 0;
 
+// --- Bürsten-PWM über Timer5 @ ~18 kHz (Arduino Mega 2560, Pin 44 = OC5C) ---
+const uint16_t BRUSH_PWM_TOP = 888; // ~18,0 kHz bei 16 MHz, N=1: f = 16e6/(TOP+1)
+
+void initBrushPWM18kHz() {
+  // Pin 44 als Ausgang (OC5C)
+  pinMode(PWM_BRUSH, OUTPUT);
+
+  // Timer5 stoppen und zurücksetzen
+  TCCR5A = 0;
+  TCCR5B = 0;
+  TCNT5  = 0;
+
+  // Fast PWM, TOP = ICR5 (Mode 14: WGM53:WGM50 = 1 1 1 0)
+  // WGM51=1 (TCCR5A), WGM52=1 & WGM53=1 (TCCR5B)
+  TCCR5A |= (1 << WGM51);
+  TCCR5B |= (1 << WGM52) | (1 << WGM53);
+
+  // Nicht-invertierender Modus für Kanal C (Pin 44 = OC5C)
+  TCCR5A |= (1 << COM5C1);
+
+  // TOP setzen für ~18 kHz
+  ICR5 = BRUSH_PWM_TOP;
+
+  // Prescaler 1 einschalten
+  TCCR5B |= (1 << CS50);
+
+  // Start mit Duty 0
+  OCR5C = 0;
+}
+
+inline void brushAnalogWrite(uint8_t pwm) {
+  // 0..255 auf 0..ICR5 abbilden
+  uint16_t val = (uint32_t)pwm * BRUSH_PWM_TOP / 255u;
+  OCR5C = val;
+}
+
 // === ENCODER ISR ===
 void isrEncoderLinks() { if (digitalRead(ENC_L_A) == digitalRead(ENC_L_B)) encoderLinks++; else encoderLinks--; }
 void isrEncoderRechts() { if (digitalRead(ENC_R_A) == digitalRead(ENC_R_B)) encoderRechts++; else encoderRechts--; }
@@ -97,6 +133,7 @@ void setup() {
   pinMode(RPWM_R, OUTPUT); pinMode(LPWM_R, OUTPUT);
   pinMode(RPWM_X, OUTPUT); pinMode(LPWM_X, OUTPUT);
   pinMode(RPWM_Z, OUTPUT); pinMode(LPWM_Z, OUTPUT);
+  initBrushPWM18kHz();
 
   pinMode(ENC_L_A, INPUT); pinMode(ENC_L_B, INPUT);
   pinMode(ENC_R_A, INPUT); pinMode(ENC_R_B, INPUT);
@@ -197,7 +234,7 @@ void senkeBuersteZuPosition(float zielPos_mm) {
 
     // Bürste starten (Ramp-up)
     for (int pwm = 0; pwm <= 255; pwm += 5) {
-      analogWrite(PWM_BRUSH, pwm);
+      brushAnalogWrite(pwm);
       delay(10);
     }
 
@@ -254,7 +291,7 @@ void senkeBuersteZuPosition(float zielPos_mm) {
   }
 
   // Bürste stoppen
-  analogWrite(PWM_BRUSH, 0);
+  brushAnalogWrite(0);
   analogWrite(RPWM_Z, 0);
   analogWrite(LPWM_Z, 0);
 
