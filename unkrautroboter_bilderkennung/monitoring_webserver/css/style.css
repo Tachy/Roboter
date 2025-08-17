@@ -1,4 +1,5 @@
 /* Global layout */
+*, *::before, *::after { box-sizing: border-box; }
 body {
   font-family: Arial, sans-serif;
   display: flex;
@@ -129,11 +130,12 @@ img {
   margin: 0;
   box-sizing: border-box;
   overflow: hidden; /* clip children to rounded corners */
+  gap: 16px; /* unified vertical spacing between children */
 }
 
 #mode-selector label {
   font-size: 1.2em;
-  margin-bottom: 10px;
+  margin: 0; /* spacing handled by parent gap */
 }
 
 select {
@@ -162,11 +164,10 @@ select {
 
 /* Status and last-capture panels */
 #status-box {
-  margin-top: 24px;
   width: 100%;
   background: #222;
   border-radius: 8px;
-  padding: 16px 12px;
+  padding: 12px;
   color: #fff;
   font-size: 1em;
   min-height: 70px;
@@ -174,11 +175,10 @@ select {
 }
 
 #last-capture-box {
-  margin-top: 16px;
   width: 100%;
   background: #222;
   border-radius: 8px;
-  padding: 10px;
+  padding: 12px;
   color: #fff;
   box-sizing: border-box;
 }
@@ -197,11 +197,10 @@ select {
 #last-capture-empty { color: #aaa; }
 
 #reset-box {
-  margin-top: 16px;
   width: 100%;
   background: #222;
   border-radius: 8px;
-  padding: 10px;
+  padding: 12px;
   color: #fff;
   box-sizing: border-box;
 }
