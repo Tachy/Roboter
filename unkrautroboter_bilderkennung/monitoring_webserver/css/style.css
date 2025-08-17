@@ -191,3 +191,14 @@ select {
 
 #last-capture-time { margin: 6px 0 0 0; color: #ccc; font-size: 0.95em; }
 #last-capture-empty { color: #aaa; }
+
+/* On narrow screens, place joypad below the live image instead of overlaying */
+@media (max-width: 1000px) {
+  #joyui {
+    position: static;
+    left: auto;
+    bottom: auto;
+    z-index: auto;
+    margin: 10px auto 0 auto; /* center under the image */
+  }
+}
