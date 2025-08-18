@@ -1,7 +1,7 @@
 import cv2
 import cv2.aruco as aruco
-from reportlab.pdfgen import canvas # type: ignore
-from reportlab.lib.units import mm # type: ignore
+from reportlab.pdfgen import canvas  # type: ignore
+from reportlab.lib.units import mm  # type: ignore
 
 # Board-Parameter
 squaresX, squaresY = 13, 13
@@ -13,10 +13,7 @@ dict_aruco = aruco.getPredefinedDictionary(aruco.DICT_4X4_250)
 
 # Charuco-Board (alte API)
 board = aruco.CharucoBoard(
-    (squaresX, squaresY),
-    squareLength_mm,
-    markerLength_mm,
-    dict_aruco
+    (squaresX, squaresY), squareLength_mm, markerLength_mm, dict_aruco
 )
 
 # Größenberechnung
