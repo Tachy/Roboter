@@ -36,7 +36,9 @@ def get_aruco_dict():
 def make_charuco_board(aruco_dict):
     ar = cv2.aruco
     if hasattr(ar, "CharucoBoard_create"):
-        return ar.CharucoBoard_create(SQUARES_X, SQUARES_Y, SQUARE_MM, MARKER_MM, aruco_dict)
+        return ar.CharucoBoard_create(
+            SQUARES_X, SQUARES_Y, SQUARE_MM, MARKER_MM, aruco_dict
+        )
     return ar.CharucoBoard((SQUARES_X, SQUARES_Y), SQUARE_MM, MARKER_MM, aruco_dict)
 
 
@@ -62,10 +64,16 @@ def detect_charuco(gray, aruco_dict, board):
 def calibrate_from_accum(marker_snaps, all_ch_corners, all_ch_ids, img_size, board):
     ar = cv2.aruco
     if hasattr(ar, "calibrateCameraCharuco"):
-        filtered = [(c, i) for c, i in zip(all_ch_corners, all_ch_ids) if i is not None and len(i) >= 4]
+        filtered = [
+            (c, i)
+            for c, i in zip(all_ch_corners, all_ch_ids)
+            if i is not None and len(i) >= 4
+        ]
         if len(filtered) >= 4:
             f_corners, f_ids = zip(*filtered)
-            ret, K, D, _, _ = ar.calibrateCameraCharuco(list(f_corners), list(f_ids), board, img_size, None, None)
+            ret, K, D, _, _ = ar.calibrateCameraCharuco(
+                list(f_corners), list(f_ids), board, img_size, None, None
+            )
             return ret, K, D
     if hasattr(ar, "calibrateCameraAruco"):
         all_corners = []
@@ -80,7 +88,9 @@ def calibrate_from_accum(marker_snaps, all_ch_corners, all_ch_ids, img_size, boa
         if not all_corners:
             raise RuntimeError("Keine Marker-Daten für calibrateCameraAruco vorhanden.")
         ids_concat = np.concatenate(all_ids, axis=0)
-        ret, K, D, _, _ = ar.calibrateCameraAruco(all_corners, ids_concat, counter, board, img_size, None, None)
+        ret, K, D, _, _ = ar.calibrateCameraAruco(
+            all_corners, ids_concat, counter, board, img_size, None, None
+        )
         return ret, K, D
     raise RuntimeError("ArUco-Kalibrierfunktionen fehlen.")
 
@@ -96,11 +106,14 @@ class CalibrationSession:
         self.aruco_dict = get_aruco_dict()
         self.board = make_charuco_board(self.aruco_dict)
         self.last_counts = (0, 0)  # (n_mk, n_ch)
+
     # Kein Overlay mehr im Hardware-Stream
 
     def _detect_on_frame(self, bgr):
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        ch_corners, ch_ids, mk_corners, mk_ids = detect_charuco(gray, self.aruco_dict, self.board)
+        ch_corners, ch_ids, mk_corners, mk_ids = detect_charuco(
+            gray, self.aruco_dict, self.board
+        )
         n_mk = 0 if mk_ids is None else len(mk_ids)
         n_ch = 0 if ch_ids is None else len(ch_ids)
         self.last_counts = (n_mk, n_ch)
@@ -137,7 +150,9 @@ class CalibrationSession:
             h, w = bgr.shape[:2]
             target_w = 320
             scale = target_w / float(w)
-            preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+            preview = cv2.resize(
+                bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA
+            )
             text = f"Aufnahme {self.snapshots}/{self.target}"
             camera._encode_and_store_last_capture(preview, quality=85)
             try:
@@ -161,19 +176,31 @@ class CalibrationSession:
             bgr = arr
         h, w = bgr.shape[:2]
         img_size = (w, h)
-        ret, K, D = calibrate_from_accum(self.marker_snapshots, self.all_ch_corners, self.all_ch_ids, img_size, self.board)
+        ret, K, D = calibrate_from_accum(
+            self.marker_snapshots,
+            self.all_ch_corners,
+            self.all_ch_ids,
+            img_size,
+            self.board,
+        )
         newK, roi = cv2.getOptimalNewCameraMatrix(K, D, img_size, alpha=0)
-        map1, map2 = cv2.initUndistortRectifyMap(K, D, None, newK, img_size, cv2.CV_16SC2)
+        map1, map2 = cv2.initUndistortRectifyMap(
+            K, D, None, newK, img_size, cv2.CV_16SC2
+        )
         np.savez(
             OUT_FILE,
-            K=K, D=D, newK=newK, roi=np.array(roi),
-            map1=map1, map2=map2,
+            K=K,
+            D=D,
+            newK=newK,
+            roi=np.array(roi),
+            map1=map1,
+            map2=map2,
             img_size=np.array(img_size),
             reproj_err=float(ret),
             board_squares=(SQUARES_X, SQUARES_Y),
             square_mm=SQUARE_MM,
             marker_mm=MARKER_MM,
-            aruco_dict=DICT_NAME
+            aruco_dict=DICT_NAME,
         )
         # Kamera-Kalibrierung neu laden
         try:

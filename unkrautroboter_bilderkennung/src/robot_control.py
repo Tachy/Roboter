@@ -9,7 +9,15 @@ import os
 import cv2
 import numpy as np
 from pathlib import Path
-from . import config, camera, serial_manager, yolo_detector, udp_server, status_ws_server, status_bus
+from . import (
+    config,
+    camera,
+    serial_manager,
+    yolo_detector,
+    udp_server,
+    status_ws_server,
+    status_bus,
+)
 from .calibration import CalibrationSession
 from . import geometry
 
@@ -18,8 +26,8 @@ logger = logging.getLogger("robot_control")
 if not logging.getLogger().hasHandlers():
     logging.basicConfig(
         level=config.LOGLEVEL,
-        format='[%(asctime)s] %(levelname)s: %(message)s',
-        datefmt='%H:%M:%S'
+        format="[%(asctime)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
     )
 
 # Persistenz-Helfer (vor Nutzung definieren)
@@ -27,6 +35,7 @@ if not logging.getLogger().hasHandlers():
 _BASE_DIR = Path(__file__).resolve().parent.parent
 _STATE_DIR = _BASE_DIR / "state"
 _MODE_FILE = _STATE_DIR / "mode.txt"
+
 
 def _persist_mode(mode: str) -> None:
     try:
@@ -38,6 +47,7 @@ def _persist_mode(mode: str) -> None:
     except Exception as e:
         raise
 
+
 def _load_persisted_mode():
     try:
         if not _MODE_FILE.exists():
@@ -47,6 +57,7 @@ def _load_persisted_mode():
         return val if val in {"AUTO", "MANUAL", "DISTORTION", "EXTRINSIK"} else None
     except Exception:
         return None
+
 
 class RobotControl:
     def __init__(self):
@@ -61,7 +72,10 @@ class RobotControl:
         self.send_command(msg)
         # Persistierten Modus laden und anwenden (falls vorhanden und gültig)
         persisted = _load_persisted_mode()
-        if persisted in {"AUTO", "MANUAL", "DISTORTION", "EXTRINSIK"} and persisted != self.mode:
+        if (
+            persisted in {"AUTO", "MANUAL", "DISTORTION", "EXTRINSIK"}
+            and persisted != self.mode
+        ):
             logger.info(f"Lade letzten Modus: {persisted}")
             self.set_mode(persisted)
         elif persisted is None:
@@ -110,7 +124,11 @@ class RobotControl:
                         h, w = bgr.shape[:2]
                         target_w = 320
                         scale = target_w / float(w)
-                        preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+                        preview = cv2.resize(
+                            bgr,
+                            (target_w, max(1, int(h * scale))),
+                            interpolation=cv2.INTER_AREA,
+                        )
                         text = "Extrinsik: Klick zum Starten"
                         try:
                             status_bus.set_message(text)
@@ -143,8 +161,14 @@ class RobotControl:
                                 h, w = bgr.shape[:2]
                                 target_w = 320
                                 scale = target_w / float(w)
-                                preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
-                                camera._encode_and_store_last_capture(preview, quality=85)
+                                preview = cv2.resize(
+                                    bgr,
+                                    (target_w, max(1, int(h * scale))),
+                                    interpolation=cv2.INTER_AREA,
+                                )
+                                camera._encode_and_store_last_capture(
+                                    preview, quality=85
+                                )
                     except Exception:
                         pass
             except Exception:
@@ -160,7 +184,6 @@ class RobotControl:
         if line == "GETXY":
             logger.info("<- Arduino: GETXY")
 
-
             # Entzerrtes Einzelbild aufnehmen und verarbeiten (immer undistortiert für GETXY)
             filename = "frame.jpg"
             camera.capture_image(filename, undistort=True)
@@ -170,7 +193,10 @@ class RobotControl:
             # Falls Welttransformation verfügbar: Pixel -> Welt (mm)
             use_world = False
             try:
-                use_world = getattr(config, 'WORLD_TRANSFORM_ACTIVE', True) and geometry.is_world_transform_ready()
+                use_world = (
+                    getattr(config, "WORLD_TRANSFORM_ACTIVE", True)
+                    and geometry.is_world_transform_ready()
+                )
             except Exception:
                 use_world = geometry.is_world_transform_ready()
             for x, y in coords:
@@ -199,7 +225,7 @@ class RobotControl:
         # Extrahiere Joystick-Daten
         if command.startswith("JOYSTICK:"):
             try:
-                parts = command[len("JOYSTICK:"):].split(",")
+                parts = command[len("JOYSTICK:") :].split(",")
                 x = y = None
                 for p in parts:
                     if p.startswith("X="):
@@ -232,15 +258,19 @@ class RobotControl:
             return
         # Wenn Kamera nicht läuft (kein Stream aktiv), Klick ignorieren
         from . import camera
+
         if not camera.is_camera_started():
             # Optional: Logging
             import logging
+
             logging.info("[Calib] Klick ignoriert: Kamera/Stream nicht aktiv.")
             return
         if self.calib_session is None:
             # Erster Klick: Kalibriervorgang starten, aber noch kein Snapshot
             self.calib_session = CalibrationSession(target_snapshots=20)
-            logger.info("[Calib] Kalibriervorgang gestartet. Nächster Klick nimmt das erste Bild auf.")
+            logger.info(
+                "[Calib] Kalibriervorgang gestartet. Nächster Klick nimmt das erste Bild auf."
+            )
             # Bannerbild "Klick zum Starten" als letzte Aufnahme veröffentlichen (Größe wie "Aufnahme X/Y")
             try:
                 arr = camera.picam2.capture_array()
@@ -254,7 +284,11 @@ class RobotControl:
                     h, w = bgr.shape[:2]
                     target_w = 320
                     scale = target_w / float(w)
-                    preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+                    preview = cv2.resize(
+                        bgr,
+                        (target_w, max(1, int(h * scale))),
+                        interpolation=cv2.INTER_AREA,
+                    )
                     text = "Kalibrierung: Klick zum Starten"
                     try:
                         status_bus.set_message(text)
@@ -270,7 +304,9 @@ class RobotControl:
         ok, counts = self.calib_session.capture_snapshot()
         if not ok:
             return
-        logger.info(f"[Calib] Snapshot {self.calib_session.snapshots}/{self.calib_session.target} (Marker {counts[0]}, Charuco {counts[1]})")
+        logger.info(
+            f"[Calib] Snapshot {self.calib_session.snapshots}/{self.calib_session.target} (Marker {counts[0]}, Charuco {counts[1]})"
+        )
         if self.calib_session.snapshots >= self.calib_session.target:
             try:
                 out_file, err = self.calib_session.finalize()
@@ -288,7 +324,11 @@ class RobotControl:
                         h, w = bgr.shape[:2]
                         target_w = 320
                         scale = target_w / float(w)
-                        preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+                        preview = cv2.resize(
+                            bgr,
+                            (target_w, max(1, int(h * scale))),
+                            interpolation=cv2.INTER_AREA,
+                        )
                         text2 = "Kalibrierung abgeschlossen"
                         try:
                             status_bus.set_message(text2)
@@ -308,7 +348,9 @@ class RobotControl:
                     pass
                 self.calib_session = None
                 # Nach Abschluss: keine Software-Overlay/Undistortion im Stream
-                logger.info("[Calib] abgeschlossen. Hardware-Stream bleibt roh; Kalibrierdaten werden für Offscreen-Verarbeitung genutzt.")
+                logger.info(
+                    "[Calib] abgeschlossen. Hardware-Stream bleibt roh; Kalibrierdaten werden für Offscreen-Verarbeitung genutzt."
+                )
 
     def extrinsic_button_pressed(self):
         """One-Shot-Extrinsik: im EXTRINSIK-Modus genau ein Bild auswerten und R,t speichern."""
@@ -342,7 +384,11 @@ class RobotControl:
                     h, w = bgr.shape[:2]
                     target_w = 320
                     scale = target_w / float(w)
-                    preview = cv2.resize(bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+                    preview = cv2.resize(
+                        bgr,
+                        (target_w, max(1, int(h * scale))),
+                        interpolation=cv2.INTER_AREA,
+                    )
                     text3 = "Extrinsik: Keine K/D gefunden"
                     try:
                         status_bus.set_message(text3)
@@ -368,15 +414,19 @@ class RobotControl:
             return
 
         # Extrinsik schätzen und speichern via geometry
-        ok, draw, text = geometry.compute_and_save_extrinsics_from_charuco(bgr, K, D, newK=newK)
+        ok, draw, text = geometry.compute_and_save_extrinsics_from_charuco(
+            bgr, K, D, newK=newK
+        )
 
         # Preview/Banner schreiben
         try:
             h, w = draw.shape[:2]
             target_w = 320
             scale = target_w / float(w)
-            preview = cv2.resize(draw, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
-            color = (0,255,0) if ok else (0,0,255)
+            preview = cv2.resize(
+                draw, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA
+            )
+            color = (0, 255, 0) if ok else (0, 0, 255)
             try:
                 status_bus.set_message(text)
             except Exception:
@@ -395,21 +445,27 @@ class RobotControl:
             # Callbacks registrieren
             udp_server.on_mode_change = self.set_mode
             udp_server.on_command = self.handle_command
-            
+
             logger.info("Starte HTTP-Server...")
             threading.Thread(target=camera.start_http_server, daemon=True).start()
-            
+
             logger.info("Starte UDP-Steuerkanal...")
-            threading.Thread(target=udp_server.start_control_server, daemon=True).start()
-            
+            threading.Thread(
+                target=udp_server.start_control_server, daemon=True
+            ).start()
+
             logger.info("Starte UDP-Joystick-Server...")
-            threading.Thread(target=udp_server.start_joystick_server, daemon=True).start()
-            
+            threading.Thread(
+                target=udp_server.start_joystick_server, daemon=True
+            ).start()
+
             # Starte Heartbeat-Listener für Videostream (UDP)
             udp_server.start_heartbeat_monitor()
             # Starte WebSocket-Status-Server (im Hintergrund)
-            threading.Thread(target=status_ws_server.start_status_ws_server, daemon=True).start()
-            
+            threading.Thread(
+                target=status_ws_server.start_status_ws_server, daemon=True
+            ).start()
+
             logger.info("Starte Hauptloop...")
             while True:
                 if self.get_mode() == "AUTO":
@@ -422,6 +478,7 @@ class RobotControl:
             self.serial.close()
             if camera.stream_active:
                 camera.stop_stream()
+
 
 # Globale Instanz für den Zugriff aus anderen Modulen
 robot = RobotControl()

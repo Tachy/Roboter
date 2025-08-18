@@ -1,258 +1,303 @@
 /* Global layout */
-*, *::before, *::after { box-sizing: border-box; }
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
 body {
-  font-family: Arial, sans-serif;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  align-items: center;
-  min-height: 100vh;
-  margin: 0;
-  background-color: #000;
-  padding: 30px 30px 30px 30px;
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: center;
+    min-height: 100vh;
+    margin: 0;
+    background-color: #000;
+    padding: 30px 30px 30px 30px;
 }
 
 #main-layout {
-  display: flex;
-  flex-direction: row;
-  align-items: flex-start;
-  gap: 40px;
-  width: 100%;
-  max-width: 1400px;
-  margin: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 40px;
+    width: 100%;
+    max-width: 1400px;
+    margin: 0;
 }
 
 /* Tighter top spacing for the video header */
 #main-layout h2 {
-  margin-top: 0px; /* reduce distance from top edge */
+    margin-top: 0px;
+    /* reduce distance from top edge */
 }
 
 @media (max-width: 1400px) {
-  #main-layout { max-width: 100vw; }
+    #main-layout {
+        max-width: 100vw;
+    }
 }
 
 @media (max-width: 1100px) {
-  #main-layout {
-    flex-direction: column;
-    align-items: center;
-    gap: 20px;
-  }
-  #video-container, #mode-selector {
-    width: 100%;
-    max-width: 98vw;
-  }
+    #main-layout {
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+    }
+
+    #video-container,
+    #mode-selector {
+        width: 100%;
+        max-width: 98vw;
+    }
 }
 
 #video-container {
-  background: #181818;
-  border-radius: 10px;
-  padding: 30px 20px;
-  box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-  color: #fff;
-  min-width: 180px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  margin: 0;
-  flex: 1 1 0;
-  min-width: 0;
-  text-align: center;
+    background: #181818;
+    border-radius: 10px;
+    padding: 30px 20px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    color: #fff;
+    min-width: 180px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    margin: 0;
+    flex: 1 1 0;
+    min-width: 0;
+    text-align: center;
 }
 
 
 .stream-wrapper {
-  width: 100%;
-  max-width: 1280px;
-  margin: 0 auto;
-  position: relative;
+    width: 100%;
+    max-width: 1280px;
+    margin: 0 auto;
+    position: relative;
 }
 
 /* Joypad overlay container (bottom-left) */
 #joyui {
-  position: absolute;
-  left: 10px;
-  bottom: 10px;
-  width: 140px;
-  z-index: 3;
-  display: none; /* only visible in MANUAL mode */
+    position: absolute;
+    left: 10px;
+    bottom: 10px;
+    width: 140px;
+    z-index: 3;
+    display: none;
+    /* only visible in MANUAL mode */
 }
 
 #joypad {
-  width: 140px; /* square area */
-  height: 140px;
-  border: 2px solid #666;
-  border-radius: 8px;
-  background: rgba(0,0,0,0.25);
-  touch-action: none; /* allow touch dragging without scrolling */
-  position: relative;
+    width: 140px;
+    /* square area */
+    height: 140px;
+    border: 2px solid #666;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.25);
+    touch-action: none;
+    /* allow touch dragging without scrolling */
+    position: relative;
 }
 
 /* Crosshair through 0/0 reaching to the edges */
-#joypad::before, #joypad::after {
-  content: "";
-  position: absolute;
-  pointer-events: none;
-  z-index: 1;
+#joypad::before,
+#joypad::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+    z-index: 1;
 }
-#joypad::before { /* vertical line */
-  top: 0; bottom: 0;
-  left: 50%;
-  width: 0;
-  border-left: 1px dashed rgba(200,200,255,0.35);
+
+#joypad::before {
+    /* vertical line */
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 0;
+    border-left: 1px dashed rgba(200, 200, 255, 0.35);
 }
-#joypad::after { /* horizontal line */
-  left: 0; right: 0;
-  top: 50%;
-  height: 0;
-  border-top: 1px dashed rgba(200,200,255,0.35);
+
+#joypad::after {
+    /* horizontal line */
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 0;
+    border-top: 1px dashed rgba(200, 200, 255, 0.35);
 }
 
 #joypad .stick {
-  position: absolute;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: rgba(71, 71, 71, 0.7);
-  border: 2px solid rgb(99, 99, 99);
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  pointer-events: none; /* moved by code; interactions handled on container */
-  z-index: 2; /* above crosshair */
+    position: absolute;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(71, 71, 71, 0.7);
+    border: 2px solid rgb(99, 99, 99);
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    /* moved by code; interactions handled on container */
+    z-index: 2;
+    /* above crosshair */
 }
 
 #joybtn {
-  margin-top: 8px;
-  width: 100%;
-  height: 40px;
-  border-radius: 6px;
-  border: 1px solid #777;
-  background: #2a2a2a;
-  color: #fff;
-  font-size: 14px;
-  cursor: pointer;
+    margin-top: 8px;
+    width: 100%;
+    height: 40px;
+    border-radius: 6px;
+    border: 1px solid #777;
+    background: #2a2a2a;
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
 }
-#joybtn:active { background: #333; }
+
+#joybtn:active {
+    background: #333;
+}
 
 img {
-  width: 100%;
-  max-width: 1280px;
-  height: auto;
-  aspect-ratio: 16/9;
-  display: block;
+    width: 100%;
+    max-width: 1280px;
+    height: auto;
+    aspect-ratio: 16/9;
+    display: block;
 }
 
-#stream-img { background: #222; }
+#stream-img {
+    background: #222;
+}
 
 #mode-selector {
-  background: #181818;
-  border-radius: 10px;
-  padding: 30px 20px;
-  box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-  color: #fff;
-  min-width: 180px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  margin: 0;
-  box-sizing: border-box;
-  overflow: hidden; /* clip children to rounded corners */
-  gap: 16px; /* unified vertical spacing between children */
+    background: #181818;
+    border-radius: 10px;
+    padding: 30px 20px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    color: #fff;
+    min-width: 180px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    margin: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    /* clip children to rounded corners */
+    gap: 16px;
+    /* unified vertical spacing between children */
 }
 
 #mode-selector label {
-  font-size: 1.2em;
-  margin: 0; /* spacing handled by parent gap */
+    font-size: 1.2em;
+    margin: 0;
+    /* spacing handled by parent gap */
 }
 
 select {
-  padding: 10px;
-  font-size: 16px;
-  border-radius: 5px;
-  border: 1px solid #ccc;
-  background: #222;
-  color: #fff;
+    padding: 10px;
+    font-size: 16px;
+    border-radius: 5px;
+    border: 1px solid #ccc;
+    background: #222;
+    color: #fff;
 }
 
 #stream-placeholder {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-size: 2em;
-  background: #222;
-  z-index: 2;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 2em;
+    background: #222;
+    z-index: 2;
 }
 
 /* Status and last-capture panels */
 #status-box {
-  width: 100%;
-  background: #222;
-  border-radius: 8px;
-  padding: 12px;
-  color: #fff;
-  font-size: 1em;
-  min-height: 70px;
-  box-sizing: border-box;
+    width: 100%;
+    background: #222;
+    border-radius: 8px;
+    padding: 12px;
+    color: #fff;
+    font-size: 1em;
+    min-height: 70px;
+    box-sizing: border-box;
 }
 
 #last-capture-box {
-  width: 100%;
-  background: #222;
-  border-radius: 8px;
-  padding: 12px;
-  color: #fff;
-  box-sizing: border-box;
+    width: 100%;
+    background: #222;
+    border-radius: 8px;
+    padding: 12px;
+    color: #fff;
+    box-sizing: border-box;
 }
 
 #last-capture-img {
-  width: 100%;
-  max-width: 260px;
-  height: auto;
-  border: 1px solid #333;
-  border-radius: 6px;
-  background: #111;
-  display: none;
+    width: 100%;
+    max-width: 260px;
+    height: auto;
+    border: 1px solid #333;
+    border-radius: 6px;
+    background: #111;
+    display: none;
 }
 
-#last-capture-time { margin: 6px 0 0 0; color: #ccc; font-size: 0.95em; }
-#last-capture-empty { color: #aaa; }
+#last-capture-time {
+    margin: 6px 0 0 0;
+    color: #ccc;
+    font-size: 0.95em;
+}
+
+#last-capture-empty {
+    color: #aaa;
+}
 
 #reset-box {
-  width: 100%;
-  background: #222;
-  border-radius: 8px;
-  padding: 12px;
-  color: #fff;
-  box-sizing: border-box;
+    width: 100%;
+    background: #222;
+    border-radius: 8px;
+    padding: 12px;
+    color: #fff;
+    box-sizing: border-box;
 }
-.rb-title { font-weight: bold; margin-bottom: 6px; }
+
+.rb-title {
+    font-weight: bold;
+    margin-bottom: 6px;
+}
 
 #reset-btn.wide {
-  margin-top: 10px;
-  width: 100%;
-  height: 40px;
-  border-radius: 6px;
-  border: 1px solid #777;
-  background: #2a2a2a;
-  color: #fff;
-  font-size: 14px;
-  cursor: pointer;
+    margin-top: 10px;
+    width: 100%;
+    height: 40px;
+    border-radius: 6px;
+    border: 1px solid #777;
+    background: #2a2a2a;
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
 }
-#reset-btn.wide:active { background: #333; }
+
+#reset-btn.wide:active {
+    background: #333;
+}
 
 /* On narrow screens, place joypad below the live image instead of overlaying */
 @media (max-width: 1000px) {
-  #joyui {
-    position: static;
-    left: auto;
-    bottom: auto;
-    z-index: auto;
-    margin: 10px auto 0 auto; /* center under the image */
-  }
+    #joyui {
+        position: static;
+        left: auto;
+        bottom: auto;
+        z-index: auto;
+        margin: 10px auto 0 auto;
+        /* center under the image */
+    }
 }

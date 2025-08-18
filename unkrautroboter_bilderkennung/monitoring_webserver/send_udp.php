@@ -22,7 +22,7 @@ if (isset($_GET['reset'])) {
     $udpPort = 5005; // Steuer-Port
     $socket = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
     if ($socket) {
-    $msg = "RESET"; // einheitlicher Steuerbefehl
+        $msg = "RESET"; // einheitlicher Steuerbefehl
         socket_sendto($socket, $msg, strlen($msg), 0, $udpHost, $udpPort);
         socket_close($socket);
         echo "OK";
@@ -54,7 +54,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['joy'])) {
     }
 
     $msg = "JOYSTICK:X={$x},Y={$y}";
-    if ($button) { $msg .= ",BUTTON:1"; }
+    if ($button) {
+        $msg .= ",BUTTON:1";
+    }
 
     $sent = socket_sendto($socket, $msg, strlen($msg), 0, $udpHost, $udpPort);
     socket_close($socket);

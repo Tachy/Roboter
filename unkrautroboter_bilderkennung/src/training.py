@@ -13,9 +13,10 @@ logger = logging.getLogger("training")
 if not logging.getLogger().hasHandlers():
     logging.basicConfig(
         level=config.LOGLEVEL,
-        format='[%(asctime)s] %(levelname)s: %(message)s',
-        datefmt='%H:%M:%S'
+        format="[%(asctime)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
     )
+
 
 def get_next_image_number():
     """Ermittelt die nächste Bildnummer für das Training."""
@@ -26,6 +27,7 @@ def get_next_image_number():
         return 1
     numbers = [int(os.path.basename(f).split("_")[1].split(".")[0]) for f in files]
     return max(numbers) + 1
+
 
 def save_training_image():
     """Nimmt ein Bild auf und speichert es im Trainingsverzeichnis (immer raw, ohne Undistortion)."""

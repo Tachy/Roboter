@@ -26,10 +26,16 @@ from . import config
 
 logger = logging.getLogger("geometry")
 if not logging.getLogger().hasHandlers():
-    logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%H:%M:%S')
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
 # Standardpfade
-CALIB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "calibration"))
+CALIB_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "calibration")
+)
 H_FILE = os.path.join(CALIB_DIR, "ground_homography.npz")
 EXTR_FILE = os.path.join(CALIB_DIR, "extrinsics.npz")
 
@@ -99,7 +105,9 @@ def load_extrinsics(path: Optional[str] = None) -> bool:
     R = np.asarray(R, dtype=float)
     t = np.asarray(t, dtype=float).reshape(3)
     if K.shape != (3, 3) or R.shape != (3, 3) or t.shape != (3,):
-        logger.warning(f"[Geom] Ungültige Formen K{K.shape}, R{R.shape}, t{t.shape} in {p}.")
+        logger.warning(
+            f"[Geom] Ungültige Formen K{K.shape}, R{R.shape}, t{t.shape} in {p}."
+        )
         return False
     _K, _R, _t = K, R, t
     n = d.get("plane_n")
@@ -116,7 +124,9 @@ def load_extrinsics(path: Optional[str] = None) -> bool:
         if _plane_is_z0:
             logger.info(f"[Geom] Extrinsik geladen; Ebene Z=0 angenommen.")
         else:
-            logger.info(f"[Geom] Extrinsik geladen; keine Ebene gefunden – Z=0 als Fallback.")
+            logger.info(
+                f"[Geom] Extrinsik geladen; keine Ebene gefunden – Z=0 als Fallback."
+            )
             _plane_is_z0 = True
     return True
 
@@ -197,13 +207,13 @@ def pixel_to_world(px: float, py: float) -> Optional[Tuple[float, float]]:
     if _H is not None:
         res = _apply_homography(px, py)
         if res is not None:
-            ox, oy = getattr(config, 'WORLD_OFFSET_XY_MM', (0.0, 0.0))
+            ox, oy = getattr(config, "WORLD_OFFSET_XY_MM", (0.0, 0.0))
             return float(res[0] - ox), float(res[1] - oy)
     # 2) Extrinsik
     if _K is not None and _R is not None and _t is not None:
         res = _ray_plane_intersection(px, py)
         if res is not None:
-            ox, oy = getattr(config, 'WORLD_OFFSET_XY_MM', (0.0, 0.0))
+            ox, oy = getattr(config, "WORLD_OFFSET_XY_MM", (0.0, 0.0))
             return float(res[0] - ox), float(res[1] - oy)
     return None
 
@@ -283,9 +293,13 @@ def compute_and_save_extrinsics_from_charuco(
     # Board erstellen
     try:
         if hasattr(ar, "CharucoBoard_create"):
-            board = ar.CharucoBoard_create(SQUARES_X, SQUARES_Y, SQUARE_MM, MARKER_MM, aruco_dict)
+            board = ar.CharucoBoard_create(
+                SQUARES_X, SQUARES_Y, SQUARE_MM, MARKER_MM, aruco_dict
+            )
         else:
-            board = ar.CharucoBoard((SQUARES_X, SQUARES_Y), SQUARE_MM, MARKER_MM, aruco_dict)
+            board = ar.CharucoBoard(
+                (SQUARES_X, SQUARES_Y), SQUARE_MM, MARKER_MM, aruco_dict
+            )
     except Exception:
         return False, draw, "Charuco-Board konnte nicht erzeugt werden."
 
@@ -311,7 +325,9 @@ def compute_and_save_extrinsics_from_charuco(
     ch_ids = None
     try:
         if hasattr(ar, "interpolateCornersCharuco"):
-            _, ch_corners, ch_ids = ar.interpolateCornersCharuco(corners, ids, gray, board)
+            _, ch_corners, ch_ids = ar.interpolateCornersCharuco(
+                corners, ids, gray, board
+            )
     except Exception:
         ch_corners, ch_ids = None, None
 
@@ -322,7 +338,9 @@ def compute_and_save_extrinsics_from_charuco(
         # Bevorzugt: direkte Charuco-Pose
         if hasattr(ar, "estimatePoseCharucoBoard"):
             try:
-                retval, rvec, tvec = ar.estimatePoseCharucoBoard(ch_corners, ch_ids, board, K, D, None, None)
+                retval, rvec, tvec = ar.estimatePoseCharucoBoard(
+                    ch_corners, ch_ids, board, K, D, None, None
+                )
                 ok_pose = bool(retval)
             except Exception:
                 ok_pose = False
@@ -333,7 +351,9 @@ def compute_and_save_extrinsics_from_charuco(
                 ids_flat = ch_ids.flatten().astype(int)
                 obj_all = board.chessboardCorners  # (N,3)
                 objp = obj_all[ids_flat].reshape(-1, 3).astype(np.float32)
-                flag = getattr(cv2, 'SOLVEPNP_IPPE_SQUARE', getattr(cv2, 'SOLVEPNP_ITERATIVE', 0))
+                flag = getattr(
+                    cv2, "SOLVEPNP_IPPE_SQUARE", getattr(cv2, "SOLVEPNP_ITERATIVE", 0)
+                )
                 ok, rvec, tvec = cv2.solvePnP(objp, imgp, K, D, flags=flag)
                 ok_pose = bool(ok)
             except Exception:
@@ -367,7 +387,7 @@ def compute_and_save_extrinsics_from_charuco(
             R=R,
             t=t,
             plane_z0=True,
-            note="EXTRINSIK: Pose aus Charuco; Z=0 Boden; mm; X rechts, Y vor"
+            note="EXTRINSIK: Pose aus Charuco; Z=0 Boden; mm; X rechts, Y vor",
         )
         try:
             load_extrinsics(p)

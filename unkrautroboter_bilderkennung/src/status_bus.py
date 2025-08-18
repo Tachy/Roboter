@@ -14,7 +14,7 @@ _ts: float = 0.0
 def set_message(text: Optional[str]) -> None:
     global _message, _ts
     with _lock:
-        _message = (text or '').strip() if text is not None else None
+        _message = (text or "").strip() if text is not None else None
         _ts = time.time()
 
 

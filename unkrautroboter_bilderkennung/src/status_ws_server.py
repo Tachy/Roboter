@@ -13,11 +13,12 @@ logger = logging.getLogger("status_ws_server")
 if not logging.getLogger().hasHandlers():
     logging.basicConfig(
         level=config.LOGLEVEL,
-        format='[%(asctime)s] %(levelname)s: %(message)s',
-        datefmt='%H:%M:%S'
+        format="[%(asctime)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
     )
 
 WS_STATUS_PORT = 8765  # WebSocket-Port für Statusdaten
+
 
 # Funktion zum Sammeln der Statusdaten (wie im udp_server)
 def get_status_data():
@@ -48,6 +49,7 @@ def get_status_data():
             return {"signal_pct": None}
         except Exception:
             return {"signal_pct": None}
+
     # CPU-Last berechnen (Prozent, 1 Sekunde Mittelwert)
     def get_cpu_load():
         try:
@@ -59,6 +61,7 @@ def get_status_data():
             total_1 = sum(map(int, parts[1:]))
             idle_1 = int(parts[4])
             import time
+
             time.sleep(0.2)
             with open("/proc/stat", "r") as f:
                 line = f.readline()
@@ -75,33 +78,36 @@ def get_status_data():
             return None
 
     # Aktuelle Uhrzeit im ISO-Format
-    now = datetime.datetime.now().isoformat(sep=' ', timespec='seconds')
+    now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
     # Uptime des robot.service (systemd)
     try:
         # systemctl show -p ActiveEnterTimestamp roboter.service
-        result = subprocess.run([
-            'systemctl', 'show', '-p', 'ActiveEnterTimestamp', 'roboter.service'
-        ], capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            ["systemctl", "show", "-p", "ActiveEnterTimestamp", "roboter.service"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
         line = result.stdout.strip()
         # Beispiel: ActiveEnterTimestamp=Sun 2025-08-10 17:00:00 CEST
-        if '=' in line:
-            _, start_str = line.split('=', 1)
+        if "=" in line:
+            _, start_str = line.split("=", 1)
             # Entferne ggf. Wochentag und Zeitzone
             parts = start_str.strip().split()
             if len(parts) >= 3:
-                date_str = parts[1] + ' ' + parts[2]
+                date_str = parts[1] + " " + parts[2]
                 try:
-                    start_dt = datetime.datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
+                    start_dt = datetime.datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
                     uptime = datetime.datetime.now() - start_dt
-                    uptime_str = str(uptime).split('.')[0]  # Nur hh:mm:ss
+                    uptime_str = str(uptime).split(".")[0]  # Nur hh:mm:ss
                 except Exception:
-                    uptime_str = '-'
+                    uptime_str = "-"
             else:
-                uptime_str = '-'
+                uptime_str = "-"
         else:
-            uptime_str = '-'
+            uptime_str = "-"
     except Exception:
-        uptime_str = '-'
+        uptime_str = "-"
     # CPU-Frequenz auslesen (MHz)
     try:
         with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "r") as f:
@@ -112,7 +118,9 @@ def get_status_data():
 
     cpu_load = get_cpu_load()
     status = {
-        "mode": robot_control.robot.get_mode() if hasattr(robot_control, 'robot') else None,
+        "mode": (
+            robot_control.robot.get_mode() if hasattr(robot_control, "robot") else None
+        ),
         "stream": camera.is_streaming(),
         "cpu_temp": camera.get_cpu_temperature(),
         "cpu_freq": cpu_freq,
@@ -133,6 +141,7 @@ def get_status_data():
             status["joystick"] = {"x": 0, "y": 0}
     return status
 
+
 async def status_broadcast(websocket):
     try:
         # Reagiere schnell auf neue Aufnahmen oder Statusmeldungen und sende sofort
@@ -145,7 +154,9 @@ async def status_broadcast(websocket):
             for _ in range(quick_checks):
                 curr_ts = camera.get_last_capture_timestamp()
                 msg_info = status_bus.get_message_info()
-                curr_msg_ts = msg_info.get("ts", 0.0) if isinstance(msg_info, dict) else 0.0
+                curr_msg_ts = (
+                    msg_info.get("ts", 0.0) if isinstance(msg_info, dict) else 0.0
+                )
                 if curr_ts != last_ts and curr_ts is not None:
                     status = get_status_data()
                     await websocket.send(json.dumps(status))
@@ -170,6 +181,7 @@ async def status_broadcast(websocket):
     except ConnectionClosedOK:
         # Verbindung wurde sauber vom Client geschlossen – kein Fehler, kein Log nötig
         pass
+
 
 def start_status_ws_server():
     async def run_server():

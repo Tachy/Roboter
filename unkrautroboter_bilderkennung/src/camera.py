@@ -10,10 +10,11 @@ import logging
 from . import config
 import numpy as np
 import cv2  # für Undistortion-Remap
-from picamera2 import Picamera2 # type: ignore
-from picamera2.encoders import MJPEGEncoder # type: ignore
-from picamera2.outputs import FileOutput # type: ignore
+from picamera2 import Picamera2  # type: ignore
+from picamera2.encoders import MJPEGEncoder  # type: ignore
+from picamera2.outputs import FileOutput  # type: ignore
 from http.server import BaseHTTPRequestHandler
+
 try:
     from http.server import ThreadingHTTPServer as ServerClass
 except ImportError:
@@ -25,9 +26,10 @@ logger = logging.getLogger("camera")
 if not logging.getLogger().hasHandlers():
     logging.basicConfig(
         level=config.LOGLEVEL,
-        format='[%(asctime)s] %(levelname)s: %(message)s',
-        datefmt='%H:%M:%S'
+        format="[%(asctime)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
     )
+
 
 class MJPEGOutput(io.BufferedIOBase):
     def __init__(self):
@@ -43,17 +45,18 @@ class MJPEGOutput(io.BufferedIOBase):
         with self.lock:
             return self.frame if self.frame else b""
 
+
 class StreamHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # HTTP-Requests ins Logging-Modul umleiten
-        logger.info("%s - - [%s] %s" % (
-            self.client_address[0],
-            self.log_date_time_string(),
-            format % args
-        ))
+        logger.info(
+            "%s - - [%s] %s"
+            % (self.client_address[0], self.log_date_time_string(), format % args)
+        )
+
     def do_GET(self):
         # /last_capture: immer bedienen, auch wenn der Stream aus ist
-        if self.path.startswith('/last_capture'):
+        if self.path.startswith("/last_capture"):
             # Kleines Hilfsbild: letztes per capture_image aufgenommenes JPEG ausliefern
             with _last_capture_lock:
                 data = _last_capture_bytes
@@ -61,17 +64,25 @@ class StreamHandler(BaseHTTPRequestHandler):
             if data:
                 try:
                     self.send_response(200)
-                    self.send_header('Age', '0')
-                    self.send_header('Cache-Control', 'no-cache, private, max-age=0, must-revalidate')
-                    self.send_header('Pragma', 'no-cache')
-                    self.send_header('Content-Type', 'image/jpeg')
-                    self.send_header('Content-Length', str(len(data)))
-                    self.send_header('Connection', 'close')
+                    self.send_header("Age", "0")
+                    self.send_header(
+                        "Cache-Control", "no-cache, private, max-age=0, must-revalidate"
+                    )
+                    self.send_header("Pragma", "no-cache")
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Connection", "close")
                     self.end_headers()
                     self.wfile.write(data)
                     try:
-                        human_ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts)) if ts else '-'
-                        logger.info(f"/last_capture an {self.client_address[0]} gesendet ({len(data)} Bytes, ts={human_ts})")
+                        human_ts = (
+                            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+                            if ts
+                            else "-"
+                        )
+                        logger.info(
+                            f"/last_capture an {self.client_address[0]} gesendet ({len(data)} Bytes, ts={human_ts})"
+                        )
                     except Exception:
                         pass
                 except Exception:
@@ -82,30 +93,37 @@ class StreamHandler(BaseHTTPRequestHandler):
             return
 
         # /stream nur bedienen, wenn aktiviert; erlaube auch /stream?irgendwas
-        if self.path.startswith('/stream'):
+        if self.path.startswith("/stream"):
             if not stream_active:
                 self.send_response(503)
                 self.end_headers()
                 self.wfile.write(b"Stream ist deaktiviert.")
                 return
             self.send_response(200)
-            self.send_header('Age', '0')
-            self.send_header('Cache-Control', 'no-cache, private')
-            self.send_header('Pragma', 'no-cache')
-            self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=FRAME')
+            self.send_header("Age", "0")
+            self.send_header("Cache-Control", "no-cache, private")
+            self.send_header("Pragma", "no-cache")
+            self.send_header(
+                "Content-Type", "multipart/x-mixed-replace; boundary=FRAME"
+            )
             self.end_headers()
             try:
                 while stream_active:
                     with stream_output.lock:
                         frame = stream_output.frame
                     if frame:
-                        self.wfile.write(b'--FRAME\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                        self.wfile.write(
+                            b"--FRAME\r\nContent-Type: image/jpeg\r\n\r\n"
+                            + frame
+                            + b"\r\n"
+                        )
                     time.sleep(0.05)  # ~20 fps
             except Exception:
                 pass
         else:
             self.send_response(404)
             self.end_headers()
+
 
 def get_cpu_temperature():
     """Liest die CPU-Temperatur des Raspberry Pi aus und gibt sie als String zurück."""
@@ -115,6 +133,7 @@ def get_cpu_temperature():
         return f"{temp:.0f} °C"
     except FileNotFoundError:
         return "N/A"
+
 
 # ==== Kalibrierung / Undistortion (nur für Einzelbilder) ====
 _calib_loaded = False
@@ -132,6 +151,7 @@ _last_capture_ts: float | None = None
 _last_capture_bytes: bytes | None = None
 _last_capture_ts: float | None = None
 
+
 def _set_last_capture_bytes(data: bytes) -> None:
     """Safely store last-capture JPEG bytes and timestamp."""
     global _last_capture_bytes, _last_capture_ts
@@ -139,10 +159,15 @@ def _set_last_capture_bytes(data: bytes) -> None:
         _last_capture_bytes = data
         _last_capture_ts = time.time()
 
+
 def _encode_and_store_last_capture(bgr_image, quality: int = 90) -> bool:
     """Encode a BGR image to JPEG and store it for the preview. Returns True on success."""
     try:
-        ok_enc, enc = cv2.imencode('.jpg', bgr_image, [int(cv2.IMWRITE_JPEG_QUALITY), max(1, min(100, quality))])
+        ok_enc, enc = cv2.imencode(
+            ".jpg",
+            bgr_image,
+            [int(cv2.IMWRITE_JPEG_QUALITY), max(1, min(100, quality))],
+        )
         if ok_enc:
             _set_last_capture_bytes(enc.tobytes())
             return True
@@ -150,7 +175,9 @@ def _encode_and_store_last_capture(bgr_image, quality: int = 90) -> bool:
         pass
     return False
 
+
 # kein Datei-Reload nötig; wir encodieren direkt aus dem Array für die Vorschau
+
 
 def _ensure_calibration_loaded():
     """Lädt Kalibrierungsdaten aus ./calibration/cam_calib_charuco.npz, wenn vorhanden."""
@@ -159,7 +186,9 @@ def _ensure_calibration_loaded():
         return True
     calib_path = Path("./calibration/cam_calib_charuco.npz")
     if not calib_path.exists():
-        logger.warning("Keine Kalibrierungsdatei gefunden: ./calibration/cam_calib_charuco.npz – speichere ungefilterte Bilder.")
+        logger.warning(
+            "Keine Kalibrierungsdatei gefunden: ./calibration/cam_calib_charuco.npz – speichere ungefilterte Bilder."
+        )
         _calib_loaded = False
         return False
     try:
@@ -175,12 +204,15 @@ def _ensure_calibration_loaded():
         _calib_map1 = d.get("map1", None)
         _calib_map2 = d.get("map2", None)
         _calib_loaded = True
-        logger.info(f"Kalibrierung geladen (K,D) aus ./calibration/cam_calib_charuco.npz; img_size={_calib_img_size}")
+        logger.info(
+            f"Kalibrierung geladen (K,D) aus ./calibration/cam_calib_charuco.npz; img_size={_calib_img_size}"
+        )
         return True
     except Exception as e:
         logger.error(f"Kalibrierung konnte nicht geladen werden: {e}")
         _calib_loaded = False
         return False
+
 
 def _get_maps_for_size(width: int, height: int):
     """Erzeugt/cached Remap-Tabellen für gegebene Größe basierend auf K,D.
@@ -193,7 +225,11 @@ def _get_maps_for_size(width: int, height: int):
         return None
     try:
         # Wenn die Größen exakt passen und map1/map2 vorhanden sind, nutze sie direkt
-        if _calib_img_size == (width, height) and _calib_map1 is not None and _calib_map2 is not None:
+        if (
+            _calib_img_size == (width, height)
+            and _calib_map1 is not None
+            and _calib_map2 is not None
+        ):
             logger.debug("Verwende gespeicherte Remap-Tabellen aus Kalibrierungsdatei.")
             map1, map2 = _calib_map1, _calib_map2
         else:
@@ -203,30 +239,40 @@ def _get_maps_for_size(width: int, height: int):
                 ar0 = cw / ch
                 ar1 = width / height
                 if abs(ar0 - ar1) > 1e-3:
-                    logger.warning(f"Abweichende Aspect-Ratio (calib {cw}x{ch} vs capture {width}x{height}) – Verzerrungen möglich.")
+                    logger.warning(
+                        f"Abweichende Aspect-Ratio (calib {cw}x{ch} vs capture {width}x{height}) – Verzerrungen möglich."
+                    )
                 # Skaliere K auf Zielgröße
                 sx = width / cw
                 sy = height / ch
                 K_scaled = _calib_K.copy()
-                K_scaled[0,0] *= sx
-                K_scaled[0,2] *= sx
-                K_scaled[1,1] *= sy
-                K_scaled[1,2] *= sy
+                K_scaled[0, 0] *= sx
+                K_scaled[0, 2] *= sx
+                K_scaled[1, 1] *= sy
+                K_scaled[1, 2] *= sy
             else:
                 # keine Info zu Kalibriergröße – versuche unskaliert (kann verzerren)
-                logger.warning("Kalibriergröße unbekannt – verwende unskaliertes K. Besser mit gleicher Auflösung kalibrieren.")
+                logger.warning(
+                    "Kalibriergröße unbekannt – verwende unskaliertes K. Besser mit gleicher Auflösung kalibrieren."
+                )
                 K_scaled = _calib_K
 
             img_size = (width, height)
-            newK, roi = cv2.getOptimalNewCameraMatrix(K_scaled, _calib_D, img_size, alpha=0)
-            map1, map2 = cv2.initUndistortRectifyMap(K_scaled, _calib_D, None, newK, img_size, cv2.CV_16SC2)
+            newK, roi = cv2.getOptimalNewCameraMatrix(
+                K_scaled, _calib_D, img_size, alpha=0
+            )
+            map1, map2 = cv2.initUndistortRectifyMap(
+                K_scaled, _calib_D, None, newK, img_size, cv2.CV_16SC2
+            )
         _undistort_cache[key] = (map1, map2)
         return map1, map2
     except Exception as e:
         logger.error(f"Fehler beim Erzeugen der Remap-Tabellen: {e}")
         return None
 
+
 # Overlay-Unterstützung entfällt im Hardware-Stream vollständig
+
 
 def reload_calibration():
     """Leert den Map-Cache und lädt Kalibrierung neu (z. B. nach neuer Kalibrierdatei)."""
@@ -235,10 +281,12 @@ def reload_calibration():
     _calib_loaded = False
     _ensure_calibration_loaded()
 
+
 def get_last_capture_timestamp():
     """Gibt den Zeitstempel (epoch seconds, float) des letzten capture_image-Aufrufs zurück, sonst None."""
     with _last_capture_lock:
         return _last_capture_ts
+
 
 def start_stream():
     """Startet den Video-Stream (Hardware-MJPEG, keine Undistortion)."""
@@ -255,6 +303,7 @@ def start_stream():
         logger.error(f"Fehler beim Starten des Streams: {str(e)}")
         stream_active = False
 
+
 def stop_stream():
     """Stoppt den Video-Stream."""
     global stream_active
@@ -267,13 +316,16 @@ def stop_stream():
         logger.error(f"Fehler beim Stoppen des Streams: {str(e)}")
         stream_active = False
 
+
 def is_streaming():
     """Prüft, ob der Stream aktiv ist."""
     return stream_active
 
+
 # Kamera-Helfer
 def is_camera_started() -> bool:
     return picam2.started
+
 
 def ensure_camera_started() -> bool:
     """Sicherstellen, dass die Kamera läuft. Liefert True, wenn sie hier gestartet wurde."""
@@ -284,6 +336,7 @@ def ensure_camera_started() -> bool:
         return True
     return False
 
+
 def stop_camera_if_idle():
     """Kamera stoppen, wenn kein Stream aktiv ist."""
     try:
@@ -292,6 +345,7 @@ def stop_camera_if_idle():
             logger.info("Kamera gestoppt (idle, kein Stream aktiv).")
     except Exception as e:
         logger.error(f"Fehler beim Stoppen der Kamera: {e}")
+
 
 # Alte Signatur entfernt; neue Signatur unten
 def capture_image(filename: str, undistort: bool = True):
@@ -313,8 +367,14 @@ def capture_image(filename: str, undistort: bool = True):
             bgr = arr
         h, w = bgr.shape[:2]
         if undistort:
-            if _ensure_calibration_loaded() and _calib_img_size and (w, h) != _calib_img_size:
-                logger.info(f"Undistortion bei {w}x{h}, Kalibrierung bei {_calib_img_size} – skaliere K entsprechend.")
+            if (
+                _ensure_calibration_loaded()
+                and _calib_img_size
+                and (w, h) != _calib_img_size
+            ):
+                logger.info(
+                    f"Undistortion bei {w}x{h}, Kalibrierung bei {_calib_img_size} – skaliere K entsprechend."
+                )
             mm = _get_maps_for_size(w, h)
             if mm is not None:
                 map1, map2 = mm
@@ -340,23 +400,27 @@ def capture_image(filename: str, undistort: bool = True):
         try:
             if started_here and not stream_active:
                 picam2.stop()
-                logger.info("Kamera nach Einzelaufnahme gestoppt (kein aktiver Stream).")
+                logger.info(
+                    "Kamera nach Einzelaufnahme gestoppt (kein aktiver Stream)."
+                )
         except Exception:
             pass
 
+
 def start_http_server():
     """Startet den HTTP-Server für den Stream."""
-    server = ServerClass(('', config.HTTP_PORT), StreamHandler)
-    server_type = getattr(server, '__class__', type(server)).__name__
+    server = ServerClass(("", config.HTTP_PORT), StreamHandler)
+    server_type = getattr(server, "__class__", type(server)).__name__
     logger.info(f"HTTP-Server ({server_type}) läuft auf Port {config.HTTP_PORT}...")
     server.serve_forever()
 
+
 # Kamera-Setup
 picam2 = Picamera2()
-picam2.configure(picam2.create_video_configuration(main={"size": config.CAMERA_RESOLUTION}))
+picam2.configure(
+    picam2.create_video_configuration(main={"size": config.CAMERA_RESOLUTION})
+)
 stream_output = MJPEGOutput()
 stream_active = False
 
 # Keine Software-Stream-Schleife mehr
-
-

@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="de">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MJPEG Stream</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
+
 <body>
     <div id="main-layout">
         <div id="mode-selector">
@@ -16,7 +18,7 @@
                 <option value="DISTORTION">DISTORTION</option>
                 <option value="EXTRINSIK">EXTRINSIK</option>
             </select>
-            
+
             <div id="status-box">
                 <b>Status:</b><br>
                 <span id="status-content">Warte auf Statusdaten ...</span>
@@ -38,7 +40,9 @@
                 <img id="stream-img" src="" alt="MJPEG Stream">
                 <div id="stream-placeholder">Stream nicht verfügbar</div>
                 <div id="joyui">
-                    <div id="joypad"><div class="stick"></div></div>
+                    <div id="joypad">
+                        <div class="stick"></div>
+                    </div>
                     <button id="joybtn" type="button">Bild aufnehmen</button>
                 </div>
             </div>
@@ -53,4 +57,5 @@
     <script src="js/joypad.js" defer></script>
     <script src="js/reset.js" defer></script>
 </body>
+
 </html>
