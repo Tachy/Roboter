@@ -35,8 +35,8 @@ Mode currentMode = WAITING_FOR_START; // Startet im Wartezustand
 #define ENC_R_B 23
 
 // Arduino-Pins Schlitten-Motor X-Achse (Mikro-Motor)
-#define RPWM_X 44
-#define LPWM_X 45
+#define RPWM_X 45
+#define LPWM_X 46
 
 #define ENC_X_A 18 // Interrupt
 #define ENC_X_B 24
@@ -132,16 +132,17 @@ void initMotorPWM18kHz() {
     OCR4B = 0;
     OCR4C = 0;
 
-    // Timer5: Pin 44 (OC5C) - Bürste
-    pinMode(PWM_BRUSH, OUTPUT);
+    // Timer5: Pins 44 (OC5C), 45 (OC5B), 46 (OC5A)
     TCCR5A = 0;
     TCCR5B = 0;
     TCNT5 = 0;
     TCCR5A |= (1 << WGM51);
     TCCR5B |= (1 << WGM52) | (1 << WGM53);
-    TCCR5A |= (1 << COM5C1); // Nicht-invertierend C
+    TCCR5A |= (1 << COM5A1) | (1 << COM5B1) | (1 << COM5C1); // Nicht-invertierend A/B/C
     ICR5 = MOTOR_PWM_TOP;
     TCCR5B |= (1 << CS50);
+    OCR5A = 0;
+    OCR5B = 0;
     OCR5C = 0;
 }
 
@@ -172,6 +173,9 @@ void motorAnalogWrite(uint8_t pin, uint8_t pwm) {
         break; // Timer5, OC5C (Bürste)
     case 45:
         OCR5B = val;
+        break; // Timer5, OC5B
+    case 46:
+        OCR5A = val;
         break; // Timer5, OC5B
     default:
         analogWrite(pin, pwm); // Fallback
@@ -229,6 +233,7 @@ void setup() {
     pinMode(LPWM_X, OUTPUT);
     pinMode(RPWM_Z, OUTPUT);
     pinMode(LPWM_Z, OUTPUT);
+    pinMode(PWM_BRUSH, OUTPUT);
     initMotorPWM18kHz();
 
     pinMode(ENC_L_A, INPUT);
