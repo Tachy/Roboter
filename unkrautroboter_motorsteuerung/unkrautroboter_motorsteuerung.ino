@@ -20,36 +20,45 @@ enum Mode {
 
 Mode currentMode = WAITING_FOR_START; // Startet im Wartezustand
 
-// BTS7960 Pins (Räder)
+// Rad links
 #define RPWM_L 5
 #define LPWM_L 6
-#define RPWM_R 9
-#define LPWM_R 10
 
-// Encoder Pins (Räder)
-#define ENC_L_A 2
-#define ENC_L_B 3
-#define ENC_R_A 18
-#define ENC_R_B 19
+#define ENC_L_A 2 // Interrupt
+#define ENC_L_B 22
+
+// Rad rechts
+#define RPWM_R 7
+#define LPWM_R 8
+
+#define ENC_R_A 3 // Interrupt
+#define ENC_R_B 23
 
 // Arduino-Pins Schlitten-Motor X-Achse (Mikro-Motor)
-#define RPWM_X 7
-#define LPWM_X 8
-#define ENC_X_A 20
-#define ENC_X_B 21
-#define END_X_L 30
+#define RPWM_X 44
+#define LPWM_X 45
+
+#define ENC_X_A 18 // Interrupt
+#define ENC_X_B 24
+
+#define END_X_L 27
+#define END_X_R 28
 
 // Arduino-Pins Schlitten-Motor Z-Achse (Mikro-Motor)
 #define RPWM_Z 11
 #define LPWM_Z 12
-#define ENC_Z_A 22
-#define ENC_Z_B 23
-#define END_Z_O 31
+
+#define ENC_Z_A 19 // Interrupt
+#define ENC_Z_B 25
+
+#define END_Z_O 29
+#define END_Z_U 30
 
 // Arduino-Pins Bürstenmotor
 #define PWM_BRUSH 44
-#define ENCODER_BRUSH_A 24
-#define ENCODER_BRUSH_B 25
+
+#define ENCODER_BRUSH_A 20 // Interrupt
+#define ENCODER_BRUSH_B 26
 
 // Bürstenmotor
 #define BRUSH_CPR 211.2
@@ -83,40 +92,90 @@ float aktuelleY_mm = 0;
 
 volatile long encoderBrush = 0;
 
-// --- Bürsten-PWM über Timer5 @ ~18 kHz (Arduino Mega 2560, Pin 44 = OC5C) ---
-const uint16_t BRUSH_PWM_TOP = 888; // ~18,0 kHz bei 16 MHz, N=1: f = 16e6/(TOP+1)
+// --- 18 kHz PWM-Initialisierung für alle 16-Bit-Timer (1,3,4,5) inkl. Bürste ---
+const uint16_t MOTOR_PWM_TOP = 888; // ~18 kHz bei 16 MHz, N=1
 
-void initBrushPWM18kHz() {
-    // Pin 44 als Ausgang (OC5C)
+void initMotorPWM18kHz() {
+    // Timer1: Pins 11 (OC1A), 12 (OC1B)
+    TCCR1A = 0;
+    TCCR1B = 0;
+    TCNT1 = 0;
+    TCCR1A |= (1 << WGM11);
+    TCCR1B |= (1 << WGM12) | (1 << WGM13);
+    TCCR1A |= (1 << COM1A1) | (1 << COM1B1); // Nicht-invertierend A/B
+    ICR1 = MOTOR_PWM_TOP;
+    TCCR1B |= (1 << CS10); // Prescaler 1
+    OCR1A = 0;
+    OCR1B = 0;
+
+    // Timer3: Pin 5 (OC3A)
+    TCCR3A = 0;
+    TCCR3B = 0;
+    TCNT3 = 0;
+    TCCR3A |= (1 << WGM31);
+    TCCR3B |= (1 << WGM32) | (1 << WGM33);
+    TCCR3A |= (1 << COM3A1); // Nicht-invertierend A
+    ICR3 = MOTOR_PWM_TOP;
+    TCCR3B |= (1 << CS30);
+    OCR3A = 0;
+
+    // Timer4: Pins 6 (OC4A), 7 (OC4B), 8 (OC4C)
+    TCCR4A = 0;
+    TCCR4B = 0;
+    TCNT4 = 0;
+    TCCR4A |= (1 << WGM41);
+    TCCR4B |= (1 << WGM42) | (1 << WGM43);
+    TCCR4A |= (1 << COM4A1) | (1 << COM4B1) | (1 << COM4C1);
+    ICR4 = MOTOR_PWM_TOP;
+    TCCR4B |= (1 << CS40);
+    OCR4A = 0;
+    OCR4B = 0;
+    OCR4C = 0;
+
+    // Timer5: Pin 44 (OC5C) - Bürste
     pinMode(PWM_BRUSH, OUTPUT);
-
-    // Timer5 stoppen und zurücksetzen
     TCCR5A = 0;
     TCCR5B = 0;
     TCNT5 = 0;
-
-    // Fast PWM, TOP = ICR5 (Mode 14: WGM53:WGM50 = 1 1 1 0)
-    // WGM51=1 (TCCR5A), WGM52=1 & WGM53=1 (TCCR5B)
     TCCR5A |= (1 << WGM51);
     TCCR5B |= (1 << WGM52) | (1 << WGM53);
-
-    // Nicht-invertierender Modus für Kanal C (Pin 44 = OC5C)
-    TCCR5A |= (1 << COM5C1);
-
-    // TOP setzen für ~18 kHz
-    ICR5 = BRUSH_PWM_TOP;
-
-    // Prescaler 1 einschalten
+    TCCR5A |= (1 << COM5C1); // Nicht-invertierend C
+    ICR5 = MOTOR_PWM_TOP;
     TCCR5B |= (1 << CS50);
-
-    // Start mit Duty 0
     OCR5C = 0;
 }
 
-inline void brushAnalogWrite(uint8_t pwm) {
-    // 0..255 auf 0..ICR5 abbilden
-    uint16_t val = (uint32_t)pwm * BRUSH_PWM_TOP / 255u;
-    OCR5C = val;
+// PWM schreiben (0..255 auf 0..TOP abbilden)
+void motorAnalogWrite(uint8_t pin, uint8_t pwm) {
+    uint16_t val = (uint32_t)pwm * MOTOR_PWM_TOP / 255u;
+    switch (pin) {
+    case 5:
+        OCR3A = val;
+        break; // Timer3, OC3A
+    case 6:
+        OCR4A = val;
+        break; // Timer4, OC4A
+    case 7:
+        OCR4B = val;
+        break; // Timer4, OC4B
+    case 8:
+        OCR4C = val;
+        break; // Timer4, OC4C
+    case 11:
+        OCR1A = val;
+        break; // Timer1, OC1A
+    case 12:
+        OCR1B = val;
+        break; // Timer1, OC1B
+    case 44:
+        OCR5C = val;
+        break; // Timer5, OC5C (Bürste)
+    case 45:
+        OCR5B = val;
+        break; // Timer5, OC5B
+    default:
+        analogWrite(pin, pwm); // Fallback
+    }
 }
 
 // === ENCODER ISR ===
@@ -149,7 +208,7 @@ void isrEncoderBrush() { encoderBrush++; }
 void setup() {
 
     Serial.begin(115200);  // Debug-Ausgaben für die IDE
-    Serial1.begin(115200); // Verbindung zum Raspberry Pi
+    Serial2.begin(115200); // Verbindung zum Raspberry Pi
     Serial.println("Programm gestartet");
 
     pinMode(RPWM_L, OUTPUT);
@@ -160,7 +219,7 @@ void setup() {
     pinMode(LPWM_X, OUTPUT);
     pinMode(RPWM_Z, OUTPUT);
     pinMode(LPWM_Z, OUTPUT);
-    initBrushPWM18kHz();
+    initMotorPWM18kHz();
 
     pinMode(ENC_L_A, INPUT);
     pinMode(ENC_L_B, INPUT);
@@ -172,6 +231,8 @@ void setup() {
     pinMode(ENC_Z_B, INPUT);
     pinMode(END_X_L, INPUT_PULLUP);
     pinMode(END_Z_O, INPUT_PULLUP);
+    pinMode(END_X_R, INPUT_PULLUP);
+    pinMode(END_Z_U, INPUT_PULLUP);
 
     attachInterrupt(digitalPinToInterrupt(ENC_L_A), isrEncoderLinks, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENC_R_A), isrEncoderRechts, CHANGE);
@@ -180,19 +241,33 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(ENCODER_BRUSH_A), isrEncoderBrush, RISING);
 
     kalibriereX();
+    kalibriereZ();
 }
 
 void kalibriereX() {
     Serial.println("Kalibriere X");
     while (digitalRead(END_X_L) == HIGH) {
-        analogWrite(RPWM_X, 0);
-        analogWrite(LPWM_X, PWM_MIN + 20);
+        motorAnalogWrite(RPWM_X, 0);
+        motorAnalogWrite(LPWM_X, PWM_MIN + 20);
         delay(10);
     }
-    analogWrite(RPWM_X, 0);
-    analogWrite(LPWM_X, 0);
+    motorAnalogWrite(RPWM_X, 0);
+    motorAnalogWrite(LPWM_X, 0);
     encoderX = 0;
-    Serial.println("X kalibriert auf 0 mm");
+    Serial.println("X kalibriert auf 0 mm (links)");
+}
+
+void kalibriereZ() {
+    Serial.println("Kalibriere Z");
+    while (digitalRead(END_Z_O) == HIGH) {
+        motorAnalogWrite(RPWM_Z, PWM_MIN + 20);
+        motorAnalogWrite(LPWM_Z, 0);
+        delay(10);
+    }
+    motorAnalogWrite(RPWM_Z, 0);
+    motorAnalogWrite(LPWM_Z, 0);
+    encoderZ = 0;
+    Serial.println("Z kalibriert auf 0 mm (oben)");
 }
 
 void setzeXPosition(float zielPos_mm) {
@@ -206,7 +281,8 @@ void setzeXPosition(float zielPos_mm) {
     unsigned long totalZeit = (unsigned long)(abs(deltaImpulse) / IMPULSE_X_PRO_MM * 12.0) + RAMP_UP_TIME_MS + RAMP_DOWN_TIME_MS;
     unsigned long rampDownStart = totalZeit - RAMP_DOWN_TIME_MS;
 
-    while ((vorwaerts && encoderX < zielAbsolut) || (!vorwaerts && encoderX > zielAbsolut)) {
+    while ((vorwaerts && encoderX < zielAbsolut && digitalRead(END_X_R) == HIGH) ||
+           (!vorwaerts && encoderX > zielAbsolut && digitalRead(END_X_L) == HIGH)) {
         unsigned long jetzt = millis();
         int pwm = PWM_MIN;
 
@@ -217,27 +293,80 @@ void setzeXPosition(float zielPos_mm) {
         else
             pwm = PWM_MAX;
 
-        analogWrite(RPWM_X, vorwaerts ? pwm : 0);
-        analogWrite(LPWM_X, vorwaerts ? 0 : pwm);
+        motorAnalogWrite(RPWM_X, vorwaerts ? pwm : 0);
+        motorAnalogWrite(LPWM_X, vorwaerts ? 0 : pwm);
         delay(10);
     }
-    analogWrite(RPWM_X, 0);
-    analogWrite(LPWM_X, 0);
+    motorAnalogWrite(RPWM_X, 0);
+    motorAnalogWrite(LPWM_X, 0);
+    // Hinweis, falls Endschalter erreicht wurde
+    if (vorwaerts && digitalRead(END_X_R) == LOW) {
+        Serial.println("X: Rechter Endschalter erreicht – vorzeitig gestoppt");
+    } else if (!vorwaerts && digitalRead(END_X_L) == LOW) {
+        Serial.println("X: Linker Endschalter erreicht – vorzeitig gestoppt");
+    }
     Serial.print("X gesetzt auf: ");
     Serial.print(zielPos_mm);
     Serial.println(" mm");
+    Serial.print("Impulsstand Ist: ");
+    Serial.print(encoderX);
+    Serial.print(" / Impulsstand Soll: ");
+    Serial.println(zielAbsolut);
 }
 
-void kalibriereZ() {
-    while (digitalRead(END_Z_O) == HIGH) {
-        analogWrite(RPWM_Z, PWM_MIN + 20);
-        analogWrite(LPWM_Z, 0);
+// Z-Achse absolut auf Zielposition in mm verfahren (analog zu setzeXPosition)
+// vorwaerts=true bedeutet Absenken (nach unten), false Anheben (nach oben)
+// Beim Anheben wird der obere Endschalter END_Z_O respektiert
+void setzeZPosition(float zielPos_mm) {
+    long zielImpulse = zielPos_mm * IMPULSE_Z_PRO_MM;
+    long deltaImpulse = zielImpulse - encoderZ;
+    bool vorwaerts = (deltaImpulse > 0);
+    long zielAbsolut = encoderZ + deltaImpulse;
+
+    unsigned long startZeit = millis();
+    unsigned long rampUpEnd = startZeit + RAMP_UP_TIME_MS;
+    unsigned long totalZeit = (unsigned long)(abs(deltaImpulse) / IMPULSE_Z_PRO_MM * 12.0) + RAMP_UP_TIME_MS + RAMP_DOWN_TIME_MS;
+    unsigned long rampDownStart = totalZeit - RAMP_DOWN_TIME_MS;
+
+    while ((vorwaerts && encoderZ < zielAbsolut && digitalRead(END_Z_U) == HIGH) ||
+           (!vorwaerts && encoderZ > zielAbsolut && digitalRead(END_Z_O) == HIGH)) {
+        unsigned long jetzt = millis();
+        int pwm = PWM_MIN;
+
+        if (jetzt < rampUpEnd)
+            pwm = PWM_MIN + ((jetzt - startZeit) * (PWM_MAX - PWM_MIN)) / RAMP_UP_TIME_MS;
+        else if (jetzt > rampDownStart)
+            pwm = PWM_MAX - ((jetzt - rampDownStart) * (PWM_MAX - PWM_MIN)) / RAMP_DOWN_TIME_MS;
+        else
+            pwm = PWM_MAX;
+
+        if (vorwaerts) {
+            // nach unten
+            motorAnalogWrite(RPWM_Z, 0);
+            motorAnalogWrite(LPWM_Z, pwm);
+        } else {
+            // nach oben
+            motorAnalogWrite(RPWM_Z, pwm);
+            motorAnalogWrite(LPWM_Z, 0);
+        }
         delay(10);
     }
-    analogWrite(RPWM_Z, 0);
-    analogWrite(LPWM_Z, 0);
-    encoderZ = 0;
-    Serial.println("Z kalibriert auf 0 mm (oben)");
+
+    motorAnalogWrite(RPWM_Z, 0);
+    motorAnalogWrite(LPWM_Z, 0);
+    // Hinweis, falls Endschalter erreicht wurde
+    if (vorwaerts && digitalRead(END_Z_U) == LOW) {
+        Serial.println("Z: Unterer Endschalter erreicht – vorzeitig gestoppt");
+    } else if (!vorwaerts && digitalRead(END_Z_O) == LOW) {
+        Serial.println("Z: Oberer Endschalter erreicht – vorzeitig gestoppt");
+    }
+    Serial.print("Z gesetzt auf: ");
+    Serial.print(zielPos_mm);
+    Serial.println(" mm");
+    Serial.print("Impulsstand Ist: ");
+    Serial.print(encoderZ);
+    Serial.print(" / Impulsstand Soll: ");
+    Serial.println(zielAbsolut);
 }
 
 unsigned long lastBrushCheck = 0;
@@ -270,7 +399,7 @@ void senkeBuersteZuPosition(float zielPos_mm) {
 
         // Bürste starten (Ramp-up)
         for (int pwm = 0; pwm <= 255; pwm += 5) {
-            brushAnalogWrite(pwm);
+            motorAnalogWrite(PWM_BRUSH, pwm);
             delay(10);
         }
 
@@ -282,7 +411,7 @@ void senkeBuersteZuPosition(float zielPos_mm) {
 
         bool drehzahlAbfall = false;
 
-        while (encoderZ < zielImpulseZ) {
+        while (encoderZ < zielImpulseZ && digitalRead(END_Z_U) == HIGH) {
             unsigned long jetzt = millis();
             int pwm = PWM_MIN;
 
@@ -294,8 +423,8 @@ void senkeBuersteZuPosition(float zielPos_mm) {
                 pwm = PWM_MAX;
             }
 
-            analogWrite(RPWM_Z, 0);
-            analogWrite(LPWM_Z, pwm);
+            motorAnalogWrite(RPWM_Z, 0);
+            motorAnalogWrite(LPWM_Z, pwm);
 
             float rpm = getBrushRPM();
             if (rpm > 0 && rpm < MIN_RPM) {
@@ -308,13 +437,13 @@ void senkeBuersteZuPosition(float zielPos_mm) {
                 // 10 mm nach oben (relativ zur aktuellen Position)
                 long rueckZiel = encoderZ - rueckImpulse10mm;
                 while (encoderZ > rueckZiel && digitalRead(END_Z_O) == HIGH) {
-                    analogWrite(RPWM_Z, PWM_MIN + 40);
-                    analogWrite(LPWM_Z, 0);
+                    motorAnalogWrite(RPWM_Z, PWM_MIN + 40);
+                    motorAnalogWrite(LPWM_Z, 0);
                     delay(10);
                 }
 
-                analogWrite(RPWM_Z, 0);
-                analogWrite(LPWM_Z, 0);
+                motorAnalogWrite(RPWM_Z, 0);
+                motorAnalogWrite(LPWM_Z, 0);
                 break; // neuer Versuch
             }
 
@@ -327,21 +456,13 @@ void senkeBuersteZuPosition(float zielPos_mm) {
     }
 
     // Bürste stoppen
-    brushAnalogWrite(0);
-    analogWrite(RPWM_Z, 0);
-    analogWrite(LPWM_Z, 0);
+    motorAnalogWrite(PWM_BRUSH, 0);
+    motorAnalogWrite(RPWM_Z, 0);
+    motorAnalogWrite(LPWM_Z, 0);
 
     // Fahre immer auf Position 10 mm von oben (Impulsziel = encoderZ - delta)
     Serial.println("Fahre auf Position 10 mm (von oben)");
-    long zielZurueck10mm = encoderZ - (encoderZ - rueckImpulse10mm);
-    while (encoderZ > zielZurueck10mm && digitalRead(END_Z_O) == HIGH) {
-        analogWrite(RPWM_Z, PWM_MIN + 40);
-        analogWrite(LPWM_Z, 0);
-        delay(10);
-    }
-
-    analogWrite(RPWM_Z, 0);
-    analogWrite(LPWM_Z, 0);
+    setzeZPosition(10);
 
     if (erfolgreich) {
         Serial.println("Ziel erreicht und zurück auf 10 mm.");
@@ -378,23 +499,28 @@ void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
         pwmL = constrain(pwmL, PWM_MIN, PWM_MAX);
         pwmR = constrain(pwmR, PWM_MIN, PWM_MAX);
 
-        analogWrite(RPWM_L, vorLinks ? pwmL : 0);
-        analogWrite(LPWM_L, vorLinks ? 0 : pwmL);
-        analogWrite(RPWM_R, vorRechts ? pwmR : 0);
-        analogWrite(LPWM_R, vorRechts ? 0 : pwmR);
+        motorAnalogWrite(RPWM_L, vorLinks ? pwmL : 0);
+        motorAnalogWrite(LPWM_L, vorLinks ? 0 : pwmL);
+        motorAnalogWrite(RPWM_R, vorRechts ? pwmR : 0);
+        motorAnalogWrite(LPWM_R, vorRechts ? 0 : pwmR);
         delay(10);
     }
 
-    analogWrite(RPWM_L, 0);
-    analogWrite(LPWM_L, 0);
-    analogWrite(RPWM_R, 0);
-    analogWrite(LPWM_R, 0);
+    motorAnalogWrite(RPWM_L, 0);
+    motorAnalogWrite(LPWM_L, 0);
+    motorAnalogWrite(RPWM_R, 0);
+    motorAnalogWrite(LPWM_R, 0);
     Serial.println("Fahrt beendet");
 }
 
 void anfrageUndAbarbeiten() {
+
+    // Setze Kamera oben in die Mitte
+    setzeXPosition(25);
+    setzeZPosition(10);
+
     aktuelleY_mm = 0;
-    Serial1.println("GETXY");
+    Serial2.println("GETXY");
     // Debug: mirror to USB serial for IDE
     Serial.println("GETXY");
 
@@ -446,8 +572,8 @@ void anfrageUndAbarbeiten() {
 
 // Liest eine Zeile von Serial1 und gibt true zurück, wenn eine vollständige Zeile gelesen wurde
 bool readSerialLine(String &buffer) {
-    while (Serial1.available()) {
-        char c = Serial1.read();
+    while (Serial2.available()) {
+        char c = Serial2.read();
 
         // Zeile vollständig wenn \n empfangen
         if (c == '\n') {
@@ -465,7 +591,7 @@ bool readSerialLine(String &buffer) {
         // Buffer-Überlauf: Verwerfe alles bis zum nächsten Zeilenende
         if (buffer.length() >= MAX_CMD_LENGTH) {
             buffer = "";
-            while (Serial1.available() && Serial1.read() != '\n')
+            while (Serial2.available() && Serial2.read() != '\n')
                 ;
             return false;
         }
@@ -565,20 +691,20 @@ void processJoystickCommand(int x, int y) {
     // Setze Motoren
     // Links
     if (pwmLeft > 0) {
-        analogWrite(RPWM_L, pwmLeft);
-        analogWrite(LPWM_L, 0);
+        motorAnalogWrite(RPWM_L, pwmLeft);
+        motorAnalogWrite(LPWM_L, 0);
     } else {
-        analogWrite(RPWM_L, 0);
-        analogWrite(LPWM_L, -pwmLeft);
+        motorAnalogWrite(RPWM_L, 0);
+        motorAnalogWrite(LPWM_L, -pwmLeft);
     }
 
     // Rechts
     if (pwmRight > 0) {
-        analogWrite(RPWM_R, pwmRight);
-        analogWrite(LPWM_R, 0);
+        motorAnalogWrite(RPWM_R, pwmRight);
+        motorAnalogWrite(LPWM_R, 0);
     } else {
-        analogWrite(RPWM_R, 0);
-        analogWrite(LPWM_R, -pwmRight);
+        motorAnalogWrite(RPWM_R, 0);
+        motorAnalogWrite(LPWM_R, -pwmRight);
     }
 
     // Debug-Ausgabe der Motorwerte
@@ -616,7 +742,7 @@ void sendeStatusJson() {
     char buffer[128];
     size_t n = serializeJson(doc, buffer);
     buffer[n] = '\0';
-    Serial1.println(buffer);
+    Serial2.println(buffer);
     // Debug: also print forwarded buffer to USB serial
     Serial.println(buffer);
 }
