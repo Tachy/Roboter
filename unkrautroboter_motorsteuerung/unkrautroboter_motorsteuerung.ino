@@ -57,7 +57,7 @@ Mode currentMode = WAITING_FOR_START; // Startet im Wartezustand
 // Arduino-Pins Bürstenmotor
 #define PWM_BRUSH 44
 
-#define ENCODER_BRUSH_A 20 // Interrupt
+#define ENCODER_BRUSH_A 27 // Polling (kein Interrupt)
 #define ENCODER_BRUSH_B 26
 
 // Bürstenmotor
@@ -179,6 +179,16 @@ void motorAnalogWrite(uint8_t pin, uint8_t pwm) {
 }
 
 // === ENCODER ISR ===
+
+// --- Polling-Funktion für ENCODER_BRUSH_A (Pin 27) ---
+void pollBrushEncoder() {
+    static int lastBrushState = HIGH;
+    int brushState = digitalRead(ENCODER_BRUSH_A);
+    if (brushState == LOW && lastBrushState == HIGH) {
+        encoderBrush++;
+    }
+    lastBrushState = brushState;
+}
 void isrEncoderLinks() {
     if (digitalRead(ENC_L_A) == digitalRead(ENC_L_B))
         encoderLinks++;
@@ -238,7 +248,6 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(ENC_R_A), isrEncoderRechts, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENC_X_A), isrEncoderX, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENC_Z_A), isrEncoderZ, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENCODER_BRUSH_A), isrEncoderBrush, RISING);
 
     kalibriereX();
     kalibriereZ();
@@ -400,6 +409,7 @@ void senkeBuersteZuPosition(float zielPos_mm) {
         // Bürste starten (Ramp-up)
         for (int pwm = 0; pwm <= 255; pwm += 5) {
             motorAnalogWrite(PWM_BRUSH, pwm);
+            pollBrushEncoder();
             delay(10);
         }
 
@@ -426,6 +436,8 @@ void senkeBuersteZuPosition(float zielPos_mm) {
             motorAnalogWrite(RPWM_Z, 0);
             motorAnalogWrite(LPWM_Z, pwm);
 
+            pollBrushEncoder();
+
             float rpm = getBrushRPM();
             if (rpm > 0 && rpm < MIN_RPM) {
                 Serial.print("Drehzahl zu niedrig (");
@@ -439,6 +451,7 @@ void senkeBuersteZuPosition(float zielPos_mm) {
                 while (encoderZ > rueckZiel && digitalRead(END_Z_O) == HIGH) {
                     motorAnalogWrite(RPWM_Z, PWM_MIN + 40);
                     motorAnalogWrite(LPWM_Z, 0);
+                    pollBrushEncoder();
                     delay(10);
                 }
 
