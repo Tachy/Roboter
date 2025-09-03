@@ -39,22 +39,27 @@
 */
 
 #include <Arduino.h> // type: ignore
+#include <LowPower.h>
 
 // ========================= Pins (anpassen, falls nötig) =========================
-const uint8_t R1_SET = 2; // PV verbinden
-const uint8_t R1_RST = 3; // PV trennen
-const uint8_t R2_SET = 4; // Batterie verbinden
-const uint8_t R2_RST = 5; // Batterie trennen
-const uint8_t R3_SET = 6; // Precharge ein
-const uint8_t R3_RST = 7; // Precharge aus
-const uint8_t R4_SET = 8; // Hauptpfad XL4015 ein
-const uint8_t R4_RST = 9; // Hauptpfad XL4015 aus
+const uint8_t R1_RST = 2; // PV verbinden
+const uint8_t R1_SET = 3; // PV trennen
+const uint8_t R2_RST = 4; // Batterie verbinden
+const uint8_t R2_SET = 5; // Batterie trennen
+const uint8_t R3_RST = 6; // Precharge ein
+const uint8_t R3_SET = 7; // Precharge aus
+const uint8_t R4_RST = 8; // Hauptpfad XL4015 ein
+const uint8_t R4_SET = 9; // Hauptpfad XL4015 aus
 
-const uint8_t PI_SHDN_PIN = 10; // Ausgang: HIGH → Pi soll Shutdown starten
-const uint8_t PI_ACK_PIN = 11;  // Eingang: HIGH → Pi heruntergefahren (optional, sonst Pullup)
+const uint8_t LED_RED = 10;    // LED rot
+const uint8_t LED_YELLOW = 11; // LED gelb
+const uint8_t LED_GREEN = 12;  // LED grün
 
-const uint8_t ADC_BAT = A0;
-const uint8_t ADC_PV = A1;
+const uint8_t PI_SHDN_PIN = 13; // Ausgang: HIGH → Pi soll Shutdown starten
+const uint8_t PI_ACK_PIN = 14;  // Eingang: HIGH → Pi heruntergefahren (optional, sonst Pullup)
+
+const uint8_t ADC_BAT = A1;
+const uint8_t ADC_PV = A2;
 
 // ========================= ADC & Teiler (ANPASSEN!) =========================
 // Tipp: Bei hochohmigen Teilern je 100 nF direkt am ADC-Pin gegen GND.
@@ -245,6 +250,10 @@ void setup() {
     pinMode(R4_SET, OUTPUT);
     pinMode(R4_RST, OUTPUT);
 
+    pinMode(LED_RED, OUTPUT);
+    pinMode(LED_YELLOW, OUTPUT);
+    pinMode(LED_GREEN, OUTPUT);
+
     pinMode(PI_SHDN_PIN, OUTPUT);
     digitalWrite(PI_SHDN_PIN, LOW);
     pinMode(PI_ACK_PIN, INPUT_PULLUP); // optional; wenn ungenutzt bleibt HIGH
@@ -255,6 +264,10 @@ void setup() {
     // Sicherer Grundzustand nach Boot
     disconnectVictronSafe();
     mainOffSequence();
+
+    Serial.begin(115200); // Baudrate frei wählen, muss zum Monitor passen
+    delay(2000);          // (Tipp) kurzer Start-Delay, weil Öffnen des Monitors resetten kann
+    Serial.println("Hallo vom Pro Mini!");
 
     // (Optional) Hier könnte man initial direkt Batterie->Victron verbinden,
     // wenn PV ausreichend ist – wir warten aber auf die PV-Reconnect-Bedingung.
@@ -334,6 +347,25 @@ void loop() {
     // Precharge-Phase abarbeiten
     tickPrecharge();
 
-    // Loop-Rate
-    delay(100);
+    // === LED-Statusanzeigen ===
+    // Gelb: Victron/Solar (verbunden = HIGH)
+    if (victron == VictronState::Connected)
+        digitalWrite(LED_YELLOW, HIGH);
+    else
+        digitalWrite(LED_YELLOW, LOW);
+
+    // Grün: Hauptsystem an
+    if (mainSys == MainState::On)
+        digitalWrite(LED_GREEN, HIGH);
+    else
+        digitalWrite(LED_GREEN, LOW);
+
+    // Rot: Hauptsystem aus
+    if (mainSys == MainState::Off)
+        digitalWrite(LED_RED, HIGH);
+    else
+        digitalWrite(LED_RED, LOW);
+
+    // 1 Sekunde schlafen
+    LowPower.powerDown(SLEEP_1S, ADC_OFF, BOD_OFF);
 }
