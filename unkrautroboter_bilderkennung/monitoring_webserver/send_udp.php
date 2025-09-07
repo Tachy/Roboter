@@ -33,7 +33,7 @@ if (isset($_GET['reset'])) {
     exit;
 }
 
-    // Virtuelles Joystick-Forwarding (POST): x,y in -100..100, optional button=1 (sent as B=1)
+// Virtuelles Joystick-Forwarding (POST): x,y in -100..100, optional button=1 (sent as B=1)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['joy'])) {
     $x = isset($_POST['x']) ? intval($_POST['x']) : 0;
     $y = isset($_POST['y']) ? intval($_POST['y']) : 0;

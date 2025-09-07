@@ -645,13 +645,11 @@ void processSerialCommand() {
             Serial.println("Modus gewechselt zu MANUAL");
         }
 
-        // Format: JOYSTICK:X=-48,Y=-54[,B=3]   (optionales Button-Feld B= oder BTN=)
+        // Format: JOYSTICK:X=-48,Y=-54[,B=3]   (optionales Button-Feld B=)
         if (cmdBuffer.indexOf("JOYSTICK:") >= 0 && currentMode == MANUAL) {
             int xStart = cmdBuffer.indexOf("X=");
             int xEnd = cmdBuffer.indexOf(",Y=");
             int yEnd = cmdBuffer.indexOf(",B=");
-            if (yEnd < 0)
-                yEnd = cmdBuffer.indexOf(",BTN=");
             if (yEnd < 0)
                 yEnd = cmdBuffer.length();
 
@@ -661,12 +659,10 @@ void processSerialCommand() {
 
                 int button = -1;
                 if (yEnd < (int)cmdBuffer.length()) {
-                    // parse button if present
+                    // parse button if present (only B= supported)
                     int bIdx = cmdBuffer.indexOf("B=", yEnd);
-                    if (bIdx < 0)
-                        bIdx = cmdBuffer.indexOf("BTN=", yEnd);
                     if (bIdx >= 0) {
-                        button = cmdBuffer.substring(bIdx + (cmdBuffer.substring(bIdx, bIdx + 4).startsWith("BTN=") ? 4 : 2)).toInt();
+                        button = cmdBuffer.substring(bIdx + 2).toInt();
                     }
                 }
 
