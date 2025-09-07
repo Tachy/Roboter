@@ -855,6 +855,22 @@ void loop() {
 
     sendeStatus();
 
+    // Sofortige Endschalter-Überprüfung im MANUAL-Modus, damit Endschalter
+    // auch dann direkt reagieren, wenn Joystick-Nachrichten seltener eintreffen.
+    // Reagiert mit der Loop-Frequenz (~10 ms).
+    if (currentMode == MANUAL) {
+        // X-Achse Endschalter (LOW = gedrückt aufgrund INPUT_PULLUP)
+        if (digitalRead(END_X_L) == LOW || digitalRead(END_X_R) == LOW) {
+            motorAnalogWrite(RPWM_X, 0);
+            motorAnalogWrite(LPWM_X, 0);
+        }
+        // Z-Achse Endschalter
+        if (digitalRead(END_Z_O) == LOW || digitalRead(END_Z_U) == LOW) {
+            motorAnalogWrite(RPWM_Z, 0);
+            motorAnalogWrite(LPWM_Z, 0);
+        }
+    }
+
     if (currentMode == WAITING_FOR_START) {
         // Im Wartezustand blinken wir eine LED oder geben periodisch eine Nachricht aus
         static unsigned long lastBlink = 0;
