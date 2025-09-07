@@ -31,7 +31,8 @@ def joystick_to_udp(joystick):
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    BUTTON_INDEX = 1  # ggf. anpassen, wenn der Knopf ein anderer Index ist
+    BUTTON_INDEX = 1  # Index des physischen Buttons (0-basiert). Anpassbar.
+    BUTTON_CODE = 3   # Zahl, die bei gedrücktem Button gesendet wird (z.B. B=3)
     SEND_INTERVAL_MS = 500
 
     last_button_state = 0
@@ -57,12 +58,12 @@ def joystick_to_udp(joystick):
         if button_1 and not last_button_state:
             button_pending = True
 
-        # Alle 500 ms senden: Achsen + Button-Flag (aktuell gedrückt ODER im Intervall gedrückt)
+        # Alle 500 ms senden: Achsen + Button-Code (aktuell gedrückt ODER im Intervall gedrückt)
         if now_ms - last_send_ms >= SEND_INTERVAL_MS:
             include_button = button_1 or button_pending
             message = f"JOYSTICK:X={last_x_value},Y={last_y_value}"
             if include_button:
-                message += ",BUTTON:1"
+                message += f",B={BUTTON_CODE}"
             sock.sendto(message.encode(), (UDP_IP, UDP_PORT))
             print(f"Gesendet: {message}")
             last_send_ms = now_ms

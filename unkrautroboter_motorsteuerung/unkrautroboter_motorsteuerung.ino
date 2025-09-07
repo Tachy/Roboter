@@ -35,8 +35,8 @@ Mode currentMode = WAITING_FOR_START; // Startet im Wartezustand
 #define ENC_R_B 23
 
 // Arduino-Pins Schlitten-Motor X-Achse (Mikro-Motor)
-#define RPWM_X 45
-#define LPWM_X 46
+#define RPWM_X 44
+#define LPWM_X 45
 
 #define ENC_X_A 18 // Interrupt
 #define ENC_X_B 24
@@ -55,7 +55,7 @@ Mode currentMode = WAITING_FOR_START; // Startet im Wartezustand
 #define END_Z_U 30
 
 // Arduino-Pins Bürstenmotor
-#define PWM_BRUSH 44
+#define PWM_BRUSH 46
 
 #define ENCODER_BRUSH_A 27 // Polling (kein Interrupt)
 #define ENCODER_BRUSH_B 26
@@ -170,13 +170,13 @@ void motorAnalogWrite(uint8_t pin, uint8_t pwm) {
         break; // Timer1, OC1B
     case 44:
         OCR5C = val;
-        break; // Timer5, OC5C (Bürste)
+        break; // Timer5, OC5C
     case 45:
         OCR5B = val;
         break; // Timer5, OC5B
     case 46:
         OCR5A = val;
-        break; // Timer5, OC5B
+        break; // Timer5, OC5A (Bürste)
     default:
         analogWrite(pin, pwm); // Fallback
     }
@@ -645,19 +645,40 @@ void processSerialCommand() {
             Serial.println("Modus gewechselt zu MANUAL");
         }
 
-        // Format: JOYSTICK:X=-48,Y=-54
+        // Format: JOYSTICK:X=-48,Y=-54[,B=3]   (optionales Button-Feld B= oder BTN=)
         if (cmdBuffer.indexOf("JOYSTICK:") >= 0 && currentMode == MANUAL) {
             int xStart = cmdBuffer.indexOf("X=");
             int xEnd = cmdBuffer.indexOf(",Y=");
-            int yEnd = cmdBuffer.length();
+            int yEnd = cmdBuffer.indexOf(",B=");
+            if (yEnd < 0)
+                yEnd = cmdBuffer.indexOf(",BTN=");
+            if (yEnd < 0)
+                yEnd = cmdBuffer.length();
 
             if (xStart >= 0 && xEnd >= 0 && xEnd > xStart) {
                 int x = cmdBuffer.substring(xStart + 2, xEnd).toInt();
-                int y = cmdBuffer.substring(xEnd + 3).toInt();
+                int y = cmdBuffer.substring(xEnd + 3, yEnd).toInt();
+
+                int button = -1;
+                if (yEnd < (int)cmdBuffer.length()) {
+                    // parse button if present
+                    int bIdx = cmdBuffer.indexOf("B=", yEnd);
+                    if (bIdx < 0)
+                        bIdx = cmdBuffer.indexOf("BTN=", yEnd);
+                    if (bIdx >= 0) {
+                        button = cmdBuffer.substring(bIdx + (cmdBuffer.substring(bIdx, bIdx + 4).startsWith("BTN=") ? 4 : 2)).toInt();
+                    }
+                }
 
                 // Prüfe Wertebereich
                 if (x >= -100 && x <= 100 && y >= -100 && y <= 100) {
-                    processJoystickCommand(x, y);
+                    if (button == 3) {
+                        // Button 3: steuere X- und Z-Motor manuell
+                        processJoystickManualXZ(x, y);
+                    } else {
+                        // Standard: Fahrssteuerung
+                        processJoystickCommand(x, y);
+                    }
                 }
             }
         }
@@ -730,6 +751,74 @@ void processJoystickCommand(int x, int y) {
     Serial.print(pwmLeft);
     Serial.print(" Rechts: ");
     Serial.println(pwmRight);
+}
+
+// Manuelle Steuerung für X- und Z-Motoren mittels Joystick (Button 3 aktiviert)
+// x -> X-Achse (links/rechts), y -> Z-Achse (oben/unten)
+void processJoystickManualXZ(int x, int y) {
+    // Deadzone und Skalierung
+    const int DEAD = 8; // kleine Deadzone in Joystick-Einheiten
+    int xAdj = (abs(x) < DEAD) ? 0 : x;
+    int yAdj = (abs(y) < DEAD) ? 0 : y;
+
+    // Normiere auf PWM_MAX
+    int pwmX = constrain((int)((xAdj / 100.0) * PWM_MAX), -PWM_MAX, PWM_MAX);
+    int pwmZ = constrain((int)((yAdj / 100.0) * PWM_MAX), -PWM_MAX, PWM_MAX);
+
+    // X-Achse: ENC_X_A/B und END_X_L / END_X_R
+    if (pwmX > 0) {
+        // vorwärts (rechts)
+        // respektiere rechten Endschalter
+        if (digitalRead(END_X_R) == HIGH) {
+            motorAnalogWrite(RPWM_X, pwmX);
+            motorAnalogWrite(LPWM_X, 0);
+        } else {
+            motorAnalogWrite(RPWM_X, 0);
+            motorAnalogWrite(LPWM_X, 0);
+        }
+    } else if (pwmX < 0) {
+        // rückwärts (links)
+        if (digitalRead(END_X_L) == HIGH) {
+            motorAnalogWrite(RPWM_X, 0);
+            motorAnalogWrite(LPWM_X, -pwmX);
+        } else {
+            motorAnalogWrite(RPWM_X, 0);
+            motorAnalogWrite(LPWM_X, 0);
+        }
+    } else {
+        motorAnalogWrite(RPWM_X, 0);
+        motorAnalogWrite(LPWM_X, 0);
+    }
+
+    // Z-Achse: ENC_Z_A/B und END_Z_O (oben) / END_Z_U (unten)
+    if (pwmZ > 0) {
+        // Absenken (nach unten) -> respektiere unteren Endschalter END_Z_U
+        if (digitalRead(END_Z_U) == HIGH) {
+            motorAnalogWrite(RPWM_Z, 0);
+            motorAnalogWrite(LPWM_Z, pwmZ);
+        } else {
+            motorAnalogWrite(RPWM_Z, 0);
+            motorAnalogWrite(LPWM_Z, 0);
+        }
+    } else if (pwmZ < 0) {
+        // Anheben (nach oben) -> respektiere oberen Endschalter END_Z_O
+        if (digitalRead(END_Z_O) == HIGH) {
+            motorAnalogWrite(RPWM_Z, -pwmZ);
+            motorAnalogWrite(LPWM_Z, 0);
+        } else {
+            motorAnalogWrite(RPWM_Z, 0);
+            motorAnalogWrite(LPWM_Z, 0);
+        }
+    } else {
+        motorAnalogWrite(RPWM_Z, 0);
+        motorAnalogWrite(LPWM_Z, 0);
+    }
+
+    // Debug
+    Serial.print("Manual XZ PWM: X=");
+    Serial.print(pwmX);
+    Serial.print(" Z=");
+    Serial.println(pwmZ);
 }
 
 // Status-JSON alle 5 Sekunden senden, egal wo im Code
