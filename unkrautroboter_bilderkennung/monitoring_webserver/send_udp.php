@@ -33,7 +33,7 @@ if (isset($_GET['reset'])) {
     exit;
 }
 
-// Virtuelles Joystick-Forwarding (POST): x,y in -100..100, optional button=1
+    // Virtuelles Joystick-Forwarding (POST): x,y in -100..100, optional button=1 (sent as B=1)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['joy'])) {
     $x = isset($_POST['x']) ? intval($_POST['x']) : 0;
     $y = isset($_POST['y']) ? intval($_POST['y']) : 0;
@@ -55,7 +55,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['joy'])) {
 
     $msg = "JOYSTICK:X={$x},Y={$y}";
     if ($button) {
-        $msg .= ",BUTTON:1";
+        // Use the compact token format expected by the Pi/Arduino: B=1
+        $msg .= ",B=1";
     }
 
     $sent = socket_sendto($socket, $msg, strlen($msg), 0, $udpHost, $udpPort);

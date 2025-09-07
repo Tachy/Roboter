@@ -11,7 +11,7 @@
     let padRect = null;
     let vx = 0; // -100 .. 100
     let vy = 0; // -100 .. 100
-    let btnLatched = false; // send BUTTON:1 once in next 500ms window
+    let btnLatched = false; // send button press once in next 500ms window (server maps to B=1)
     let modeIsManual = false;
     let centerSendPending = false; // send exactly once after re-center
 
@@ -154,7 +154,7 @@
         if (forceButton || btnLatched) btnLatched = false;
     }
 
-    // Separate capture button: send immediately with BUTTON:1
+    // Separate capture button: send immediately; server will map to B=1 token
     btn.addEventListener('click', (e) => {
         e.stopPropagation();
         doSend(true).catch(() => { });

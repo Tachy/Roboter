@@ -239,8 +239,8 @@ class RobotControl:
                 pass
         mode = self.get_mode()
         if mode == "MANUAL":
-            if ",BUTTON:1" in command:
-                command = command.replace(",BUTTON:1", "")
+            if ",B=1" in command:
+                command = command.replace(",B=1", "")
             self.send_command(command)
             return True
         elif mode == "DISTORTION":

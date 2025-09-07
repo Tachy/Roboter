@@ -99,8 +99,8 @@ def start_joystick_server():
             handled = on_command(command)
             if handled:
                 logger.debug(f"Joystick-Befehl empfangen und verarbeitet: {command} (von {addr})")
-                # BUTTON:1: je nach Modus
-                if ",BUTTON:1" in command:
+                # BUTTON (B=1): je nach Modus
+                if ",B=1" in command:
                     mode = robot_control.robot.get_mode() if hasattr(robot_control, 'robot') else None
                     if mode == "MANUAL":
                         training.save_training_image()
