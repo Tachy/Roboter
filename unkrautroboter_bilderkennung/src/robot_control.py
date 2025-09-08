@@ -20,6 +20,8 @@ from . import (
 )
 from .calibration import CalibrationSession
 from . import geometry
+import subprocess
+import shutil
 
 # Logger einrichten
 logger = logging.getLogger("robot_control")
@@ -468,6 +470,20 @@ class RobotControl:
 
             logger.info("Starte Hauptloop...")
             while True:
+                # Check for firmware uploads in MANUAL mode
+                try:
+                    if self.get_mode() == "MANUAL":
+                        upload_dir = Path(config.UPLOAD_DIR)
+                        if upload_dir.exists():
+                            for p in upload_dir.iterdir():
+                                if p.suffix.lower() == ".hex":
+                                    logger.info(f"Gefundene Firmware: {p}")
+                                    # flash file p with avrdude
+                                    self._flash_hex_to_mega(p)
+                                    break
+                except Exception as e:
+                    logger.error(f"Fehler beim Scan des Upload-Verzeichnisses: {e}")
+
                 if self.get_mode() == "AUTO":
                     self.process_auto_mode()
                 time.sleep(0.1)
@@ -478,6 +494,103 @@ class RobotControl:
             self.serial.close()
             if camera.stream_active:
                 camera.stop_stream()
+
+    def _flash_hex_to_mega(self, hexpath: Path) -> None:
+        """Flash the given .hex to the Mega using avrdude on config.SERIAL_PORT.
+
+        Procedure:
+        - Stop serial reader, close serial port
+        - Run avrdude (non-blocking call) and wait
+        - Move .hex to .uploaded or .failed
+        - Reopen serial connection
+        """
+        logger.info(f"Starte Flash auf MEGA mit {hexpath}")
+        try:
+            # Close serial manager to release /dev/serial0
+            try:
+                self.serial.close()
+            except Exception:
+                pass
+
+            # Optional: toggle RESET via GPIO so Mega bootloader accepts upload
+            try:
+                if getattr(config, "FW_RESET_GPIO", None) is not None:
+                    gpio_pin = int(config.FW_RESET_GPIO)
+                    logger.info(f"Versuche Mega-Reset via GPIO {gpio_pin}")
+                    try:
+                        import RPi.GPIO as GPIO
+
+                        GPIO.setmode(GPIO.BCM)
+                        GPIO.setup(gpio_pin, GPIO.OUT, initial=GPIO.HIGH)
+                        # Reset aktiv LOW: pulse LOW briefly
+                        GPIO.output(gpio_pin, GPIO.LOW)
+                        time.sleep(0.05)
+                        GPIO.output(gpio_pin, GPIO.HIGH)
+                        time.sleep(0.1)
+                        GPIO.cleanup(gpio_pin)
+                    except Exception:
+                        # Fallback auf gpiozero falls vorhanden
+                        try:
+                            from gpiozero import OutputDevice
+
+                            dev = OutputDevice(
+                                gpio_pin, active_high=True, initial_value=True
+                            )
+                            dev.off()
+                            time.sleep(0.05)
+                            dev.on()
+                            time.sleep(0.1)
+                            dev.close()
+                        except Exception as e:
+                            logger.warning(f"GPIO-Reset nicht möglich: {e}")
+            except Exception as e:
+                logger.warning(f"Fehler beim Versuch GPIO-Reset: {e}")
+
+            avrdude_cmd = [
+                "avrdude",
+                "-v",
+                "-patmega2560",
+                "-cwiring",
+                f"-P{config.SERIAL_PORT}",
+                f"-b{config.BAUDRATE}",
+                "-D",
+                f"-Uflash:w:{str(hexpath)}:i",
+            ]
+            logger.info("Aufruf: %s", " ".join(avrdude_cmd))
+            proc = subprocess.run(
+                avrdude_cmd, capture_output=True, text=True, timeout=300
+            )
+            if proc.returncode == 0:
+                logger.info(f"Flash erfolgreich: {hexpath}")
+                target = hexpath.with_suffix(hexpath.suffix + ".uploaded")
+                shutil.move(str(hexpath), str(target))
+            else:
+                logger.error(
+                    f"avrdude failed: {proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+                )
+                target = hexpath.with_suffix(hexpath.suffix + ".failed")
+                shutil.move(str(hexpath), str(target))
+        except subprocess.TimeoutExpired:
+            logger.error("avrdude Timeout beim Flashen")
+            target = hexpath.with_suffix(hexpath.suffix + ".failed")
+            try:
+                shutil.move(str(hexpath), str(target))
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"Fehler beim Flashen: {e}")
+            target = hexpath.with_suffix(hexpath.suffix + ".failed")
+            try:
+                shutil.move(str(hexpath), str(target))
+            except Exception:
+                pass
+        finally:
+            # Recreate serial manager so robot resumes communication
+            try:
+                self.serial = serial_manager.SerialManager()
+                time.sleep(1)
+            except Exception as e:
+                logger.error(f"Fehler beim Reopen der seriellen Schnittstelle: {e}")
 
 
 # Globale Instanz für den Zugriff aus anderen Modulen

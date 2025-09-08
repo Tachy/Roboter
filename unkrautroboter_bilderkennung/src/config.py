@@ -46,6 +46,13 @@ CAMERA_RESOLUTION = (1280, 720)
 # Training Setup
 TRAINING_IMAGE_DIR = "./training/"
 
+# Firmware upload directory for .hex files (Pi -> Mega flashing)
+UPLOAD_DIR = "./upload/"
+
+# GPIO-Pin (BCM) an der Raspberry Pi, der mit dem RESET-Pin des Mega verbunden ist.
+# Wenn None, wird kein Reset per GPIO durchgeführt. Hinweis: RESET ist aktiv LOW.
+FW_RESET_GPIO = None  # z.B. 17
+
 # Weltkoordinaten: optionaler XY-Versatz (mm), um den Ursprung zu verschieben (z. B. unter die linke Bürste)
 # Beispiel: WORLD_OFFSET_XY_MM = (x_mm, y_mm) – wird von pixel_to_world subtrahiert
 WORLD_OFFSET_XY_MM = (0.0, 0.0)
