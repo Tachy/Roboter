@@ -518,7 +518,7 @@ class RobotControl:
                     gpio_pin = int(config.FW_RESET_GPIO)
                     logger.info(f"Versuche Mega-Reset via GPIO {gpio_pin}")
                     try:
-                        import RPi.GPIO as GPIO
+                        import RPi.GPIO as GPIO  # type: ignore
 
                         GPIO.setmode(GPIO.BCM)
                         GPIO.setup(gpio_pin, GPIO.OUT, initial=GPIO.HIGH)
@@ -531,7 +531,7 @@ class RobotControl:
                     except Exception:
                         # Fallback auf gpiozero falls vorhanden
                         try:
-                            from gpiozero import OutputDevice
+                            from gpiozero import OutputDevice  # type: ignore
 
                             dev = OutputDevice(
                                 gpio_pin, active_high=True, initial_value=True
