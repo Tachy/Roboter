@@ -68,7 +68,9 @@ const float ADC_REF_V = 5.0;
 const float ADC_MAX = 1023.0;
 
 // U_in = U_adc * ((Rtop + Rbottom) / Rbottom)
-const float BAT_RTOP = 100000.0;   // z. B. 100k
+// Angepasst: aus Kalibrierung mit Messpaaren (berechnet→gemessen)
+// Faktor ≈ 1.04 → Rtop neu gewählt, damit (Rtop+Rbottom)/Rbottom ≈ 11.439
+const float BAT_RTOP = 104400.0;   // angepasst ~104.4k
 const float BAT_RBOTTOM = 10000.0; // z. B. 10k
 const float PV_RTOP = 180000.0;    // z. B. 180k
 const float PV_RBOTTOM = 10000.0;  // z. B. 10k
@@ -280,6 +282,14 @@ void loop() {
     // Spannungen einlesen
     float u_bat = adcToVolt(readAdcAveraged(ADC_BAT), BAT_RTOP, BAT_RBOTTOM);
     float u_pv = adcToVolt(readAdcAveraged(ADC_PV), PV_RTOP, PV_RBOTTOM);
+
+    // Debug: Batterie- und PV-Spannung seriell ausgeben
+    Serial.print("u_bat: ");
+    Serial.print(u_bat);
+    Serial.println(" V");
+    Serial.print("u_pv:  ");
+    Serial.print(u_pv);
+    Serial.println(" V");
 
     // ---------------- PV-ONLY Entscheidung für Victron ----------------
     // DISCONNECT-Pfad
