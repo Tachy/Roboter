@@ -11,3 +11,5 @@ Entwurf Elektronik: Fritzing
 Energiemanagement: Arduino Pro Mini 5V
 Motorsteuerung: Arduino MEGA
 Bilderkennung mit KI: Raspberry Pi 4B mit RaspBerry HQ Kamera
+
+Besonderheit: wurde zur Einarbeitung in KI vollständig "vibe" coded, über den github-Copilot mit GPT-5/GPT-5 mini.
