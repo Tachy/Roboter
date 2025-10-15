@@ -12,7 +12,7 @@ Enthält alle wichtigen Konstanten und Einstellungen.
 # Serial Setup
 SIMULATED_SERIAL_PORT = "/tmp/ttyV8"  # Virtueller Port für die Simulation
 SERIAL_PORT = "/dev/serial0"  # Echter serieller Port
-BAUDRATE = 115200
+BAUDRATE = 115200  # Baudrate der seriellen Verbindung
 
 # UDP Setup
 UDP_IP = "0.0.0.0"  # Hört auf alle Schnittstellen
@@ -51,7 +51,7 @@ UPLOAD_DIR = "./upload/"
 
 # GPIO-Pin (BCM) an der Raspberry Pi, der mit dem RESET-Pin des Mega verbunden ist.
 # Wenn None, wird kein Reset per GPIO durchgeführt. Hinweis: RESET ist aktiv LOW.
-FW_RESET_GPIO = None  # z.B. 17
+FW_RESET_GPIO = 17  # z.B. 17
 
 # Weltkoordinaten: optionaler XY-Versatz (mm), um den Ursprung zu verschieben (z. B. unter die linke Bürste)
 # Beispiel: WORLD_OFFSET_XY_MM = (x_mm, y_mm) – wird von pixel_to_world subtrahiert
