@@ -149,6 +149,12 @@ uint8_t vol_hist_count = 0; // wie viele Werte aktuell vorhanden (bis VOLTAGE_AV
 
 // ========================= Relais-Helfer =========================
 void pulseHigh(uint8_t pin, uint16_t ms) {
+    // Log the pulse action with a human-readable pin label
+    Serial.print("Pulse ");
+    Serial.print(pin);
+    Serial.print(" for ");
+    Serial.print(ms);
+    Serial.println(" ms");
     digitalWrite(pin, HIGH);
     delay(ms);
     digitalWrite(pin, LOW);
@@ -176,6 +182,7 @@ void R4_MAIN_ON() { pulseHigh(R4_SET, RELAY_PULSE_MS); }
 void R4_MAIN_OFF() { pulseHigh(R4_RST, RELAY_PULSE_MS); }
 
 void connectVictronSafe() {
+    Serial.println("connectVictronSafe(): connecting battery then PV");
     if (!batConnected) {
         R2_BAT_CONNECT();
         delay(50);
@@ -185,9 +192,11 @@ void connectVictronSafe() {
         delay(50);
     }
     victron = VictronState::Connected;
+    Serial.println("connectVictronSafe(): Victron connected");
 }
 
 void disconnectVictronSafe() {
+    Serial.println("disconnectVictronSafe(): disconnecting PV then battery");
     if (pvConnected) {
         R1_PV_DISCONN();
         delay(50);
@@ -197,11 +206,13 @@ void disconnectVictronSafe() {
         delay(50);
     }
     victron = VictronState::Disconnected;
+    Serial.println("disconnectVictronSafe(): Victron disconnected");
 }
 
 void mainOnSequence() {
     if (mainSys != MainState::Off)
         return;
+    Serial.println("mainOnSequence(): starting precharge sequence");
     R3_PRECH_ON();
     t_precharge_start = millis();
     mainSys = MainState::Precharging;
@@ -211,30 +222,39 @@ void tickPrecharge() {
     if (mainSys != MainState::Precharging)
         return;
     if (millis() - t_precharge_start >= PRECHARGE_MS) {
+        Serial.println("tickPrecharge(): precharge complete, enabling main path");
         R4_MAIN_ON();
         delay(50);
         R3_PRECH_OFF();
         mainSys = MainState::On;
+        Serial.println("tickPrecharge(): main system ON");
     }
 }
 
 void mainOffSequence() {
     if (mainSys == MainState::Off)
         return;
+    Serial.println("mainOffSequence(): turning main system OFF");
     R4_MAIN_OFF();
     delay(80);
     R3_PRECH_OFF();
     mainSys = MainState::Off;
+    Serial.println("mainOffSequence(): main system OFF");
 }
 
 void requestPiShutdownAndPowerOff() {
     if (mainSys == MainState::ShuttingDown || mainSys == MainState::Off)
         return;
+    Serial.println("requestPiShutdownAndPowerOff(): asserting PI_SHDN_PIN to request Pi shutdown");
     digitalWrite(PI_SHDN_PIN, HIGH);
     t_pi_shutdown = millis();
+    Serial.print("requestPiShutdownAndPowerOff(): holding PI_SHDN_PIN for ");
+    Serial.print(PI_SHUTDOWN_HOLD_MS);
+    Serial.println(" ms");
     delay(PI_SHUTDOWN_HOLD_MS);
     digitalWrite(PI_SHDN_PIN, LOW);
     mainSys = MainState::ShuttingDown;
+    Serial.println("requestPiShutdownAndPowerOff(): PI_SHDN_PIN pulse complete; entering ShuttingDown state");
 }
 
 void tickPiShutdown() {
@@ -243,6 +263,7 @@ void tickPiShutdown() {
     // Ohne ACK-Abfrage: nach konfigurierter Wartezeit (PI_SHUTDOWN_WAIT_MS)
     // automatisch abschalten.
     if ((millis() - t_pi_shutdown) >= PI_SHUTDOWN_WAIT_MS) {
+        Serial.println("tickPiShutdown(): shutdown wait time elapsed, executing mainOffSequence()");
         mainOffSequence();
     }
 }
@@ -313,7 +334,19 @@ void loop() {
     Serial.print(" V, ");
     Serial.print("u_pv(avg): ");
     Serial.print(u_pv);
-    Serial.println(" V");
+    Serial.print(" V");
+
+    // Einfacher 4-Zeichen-Status: PV, Batterie, Precharge, Hauptsystem
+    // '_' = AUS, '*' = AN
+    char sPV = pvConnected ? '*' : '_';
+    char sBAT = batConnected ? '*' : '_';
+    char sPRE = (mainSys == MainState::Precharging) ? '*' : '_';
+    char sMAIN = (mainSys == MainState::On) ? '*' : '_';
+    Serial.print("  sts: ");
+    Serial.print(sPV);
+    Serial.print(sBAT);
+    Serial.print(sPRE);
+    Serial.println(sMAIN);
 
     // Entscheidungen nur treffen, wenn das Mittelwert-Fenster voll ist
     bool avg_ready = (vol_hist_count >= VOLTAGE_AVG_N);
@@ -329,27 +362,39 @@ void loop() {
         // ---------------- PV-ONLY Entscheidung für Victron ----------------
         // DISCONNECT-Pfad
         if (u_pv < PV_DISCONNECT_V) {
-            if (t_pv_disconnect_start == 0)
+            if (t_pv_disconnect_start == 0) {
                 t_pv_disconnect_start = now;
+                Serial.println("PV disconnect timer started");
+            }
             if ((now - t_pv_disconnect_start) >= PV_DISCONNECT_HOLD_MS) {
                 if (victron == VictronState::Connected) {
+                    Serial.println("PV disconnect condition met -> disconnecting Victron");
                     disconnectVictronSafe(); // erst PV, dann Batterie
                 }
             }
         } else {
+            if (t_pv_disconnect_start != 0) {
+                Serial.println("PV disconnect condition cleared -> timer reset");
+            }
             t_pv_disconnect_start = 0; // Bedingung nicht mehr erfüllt → Timer zurücksetzen
         }
 
         // RECONNECT-Pfad
         if (u_pv > PV_RECONNECT_V) {
-            if (t_pv_reconnect_start == 0)
+            if (t_pv_reconnect_start == 0) {
                 t_pv_reconnect_start = now;
+                Serial.println("PV reconnect timer started");
+            }
             if ((now - t_pv_reconnect_start) >= PV_RECONNECT_HOLD_MS) {
                 if (victron == VictronState::Disconnected) {
+                    Serial.println("PV reconnect condition met -> connecting Victron");
                     connectVictronSafe(); // erst Batterie, dann PV
                 }
             }
         } else {
+            if (t_pv_reconnect_start != 0) {
+                Serial.println("PV reconnect condition cleared -> timer reset");
+            }
             t_pv_reconnect_start = 0;
         }
 
@@ -360,28 +405,40 @@ void loop() {
 
         // Low-Bedingung
         if (u_bat <= BAT_SOC10_V) {
-            if (t_cond_start_bat_low == 0)
+            if (t_cond_start_bat_low == 0) {
                 t_cond_start_bat_low = now;
+                Serial.println("BAT low timer started");
+            }
             if ((now - t_cond_start_bat_low) >= STABLE_REQ_MS && !soc_low_latched) {
                 soc_low_latched = true;
+                Serial.println("BAT low condition met -> requesting Pi shutdown");
                 // Pi Shutdown anstoßen; Power-Off folgt per tickPiShutdown()
                 requestPiShutdownAndPowerOff();
             }
         } else if (u_bat >= (BAT_SOC10_V + BAT_SOC10_HYST)) {
             // Low-Latch wieder freigeben
+            if (t_cond_start_bat_low != 0) {
+                Serial.println("BAT low condition cleared -> timer reset and latch released");
+            }
             soc_low_latched = false;
             t_cond_start_bat_low = 0;
         }
 
         // 3) >~50% SoC → Hauptsystem einschalten (nur wenn nicht gerade im Shutdown/Aus)
         if (u_bat >= BAT_SOC50_V && mainSys == MainState::Off && !soc_low_latched) {
-            if (t_cond_start_bat_high == 0)
+            if (t_cond_start_bat_high == 0) {
                 t_cond_start_bat_high = now;
+                Serial.println("BAT high timer started");
+            }
             if ((now - t_cond_start_bat_high) >= STABLE_REQ_MS && !soc_high_latched) {
                 soc_high_latched = true;
+                Serial.println("BAT high condition met -> starting main system");
                 mainOnSequence();
             }
         } else if (u_bat <= (BAT_SOC50_V - BAT_SOC50_HYST)) {
+            if (t_cond_start_bat_high != 0) {
+                Serial.println("BAT high condition cleared -> timer reset and latch released");
+            }
             soc_high_latched = false;
             t_cond_start_bat_high = 0;
         }
