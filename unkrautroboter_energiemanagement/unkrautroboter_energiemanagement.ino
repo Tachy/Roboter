@@ -140,6 +140,13 @@ uint32_t t_cond_start_bat_high = 0;
 uint32_t t_pv_disconnect_start = 0;
 uint32_t t_pv_reconnect_start = 0;
 
+// Glättung: gleitender Mittelwert aus den letzten N Messungen
+const uint8_t VOLTAGE_AVG_N = 5; // Anzahl Samples im Fenster
+float bat_hist[VOLTAGE_AVG_N] = {0};
+float pv_hist[VOLTAGE_AVG_N] = {0};
+uint8_t vol_hist_idx = 0;   // Einfügeindex (0..VOLTAGE_AVG_N-1)
+uint8_t vol_hist_count = 0; // wie viele Werte aktuell vorhanden (bis VOLTAGE_AVG_N)
+
 // ========================= Relais-Helfer =========================
 void pulseHigh(uint8_t pin, uint16_t ms) {
     digitalWrite(pin, HIGH);
@@ -277,80 +284,111 @@ void setup() {
 void loop() {
     const uint32_t now = millis();
 
-    // Spannungen einlesen
-    float u_bat = adcToVolt(readAdcAveraged(ADC_BAT), BAT_RTOP, BAT_RBOTTOM);
-    float u_pv = adcToVolt(readAdcAveraged(ADC_PV), PV_RTOP, PV_RBOTTOM);
+    // Spannungen einlesen (je Messzyklus einmal) und ins Historien-Window schieben
+    float u_bat_sample = adcToVolt(readAdcAveraged(ADC_BAT), BAT_RTOP, BAT_RBOTTOM);
+    float u_pv_sample = adcToVolt(readAdcAveraged(ADC_PV), PV_RTOP, PV_RBOTTOM);
 
-    // Debug: Batterie- und PV-Spannung seriell ausgeben
-    Serial.print("u_bat: ");
+    // In zirkuläre Puffer schreiben
+    bat_hist[vol_hist_idx] = u_bat_sample;
+    pv_hist[vol_hist_idx] = u_pv_sample;
+    vol_hist_idx = (vol_hist_idx + 1) % VOLTAGE_AVG_N;
+    if (vol_hist_count < VOLTAGE_AVG_N)
+        vol_hist_count++;
+
+    // Gemittelten Wert aus dem Fenster berechnen
+    float u_bat = 0.0f;
+    float u_pv = 0.0f;
+    for (uint8_t i = 0; i < vol_hist_count; i++) {
+        u_bat += bat_hist[i];
+        u_pv += pv_hist[i];
+    }
+    if (vol_hist_count > 0) {
+        u_bat /= vol_hist_count;
+        u_pv /= vol_hist_count;
+    }
+
+    // Debug: gemittelte Batterie- und PV-Spannung seriell ausgeben
+    Serial.print("u_bat(avg): ");
     Serial.print(u_bat);
-    Serial.println(" V");
-    Serial.print("u_pv:  ");
+    Serial.print(" V, ");
+    Serial.print("u_pv(avg): ");
     Serial.print(u_pv);
     Serial.println(" V");
 
-    // ---------------- PV-ONLY Entscheidung für Victron ----------------
-    // DISCONNECT-Pfad
-    if (u_pv < PV_DISCONNECT_V) {
-        if (t_pv_disconnect_start == 0)
-            t_pv_disconnect_start = now;
-        if ((now - t_pv_disconnect_start) >= PV_DISCONNECT_HOLD_MS) {
-            if (victron == VictronState::Connected) {
-                disconnectVictronSafe(); // erst PV, dann Batterie
-            }
-        }
+    // Entscheidungen nur treffen, wenn das Mittelwert-Fenster voll ist
+    bool avg_ready = (vol_hist_count >= VOLTAGE_AVG_N);
+
+    if (!avg_ready) {
+        // Noch nicht genug Messungen gesammelt → keine Reaktion auf Spannungswerte
+        Serial.print("Waiting for samples: ");
+        Serial.print(vol_hist_count);
+        Serial.print("/");
+        Serial.print(VOLTAGE_AVG_N);
+        Serial.println(" (skipping voltage-based actions)");
     } else {
-        t_pv_disconnect_start = 0; // Bedingung nicht mehr erfüllt → Timer zurücksetzen
-    }
-
-    // RECONNECT-Pfad
-    if (u_pv > PV_RECONNECT_V) {
-        if (t_pv_reconnect_start == 0)
-            t_pv_reconnect_start = now;
-        if ((now - t_pv_reconnect_start) >= PV_RECONNECT_HOLD_MS) {
-            if (victron == VictronState::Disconnected) {
-                connectVictronSafe(); // erst Batterie, dann PV
+        // ---------------- PV-ONLY Entscheidung für Victron ----------------
+        // DISCONNECT-Pfad
+        if (u_pv < PV_DISCONNECT_V) {
+            if (t_pv_disconnect_start == 0)
+                t_pv_disconnect_start = now;
+            if ((now - t_pv_disconnect_start) >= PV_DISCONNECT_HOLD_MS) {
+                if (victron == VictronState::Connected) {
+                    disconnectVictronSafe(); // erst PV, dann Batterie
+                }
             }
+        } else {
+            t_pv_disconnect_start = 0; // Bedingung nicht mehr erfüllt → Timer zurücksetzen
         }
-    } else {
-        t_pv_reconnect_start = 0;
+
+        // RECONNECT-Pfad
+        if (u_pv > PV_RECONNECT_V) {
+            if (t_pv_reconnect_start == 0)
+                t_pv_reconnect_start = now;
+            if ((now - t_pv_reconnect_start) >= PV_RECONNECT_HOLD_MS) {
+                if (victron == VictronState::Disconnected) {
+                    connectVictronSafe(); // erst Batterie, dann PV
+                }
+            }
+        } else {
+            t_pv_reconnect_start = 0;
+        }
+
+        // ---------------- SoC-LOGIK (über Batterie-Ruhespannung) ----------------
+        // 2) <~10% SoC → Pi sauber herunterfahren, dann XL4015 aus
+        static bool soc_low_latched = false;
+        static bool soc_high_latched = false;
+
+        // Low-Bedingung
+        if (u_bat <= BAT_SOC10_V) {
+            if (t_cond_start_bat_low == 0)
+                t_cond_start_bat_low = now;
+            if ((now - t_cond_start_bat_low) >= STABLE_REQ_MS && !soc_low_latched) {
+                soc_low_latched = true;
+                // Pi Shutdown anstoßen; Power-Off folgt per tickPiShutdown()
+                requestPiShutdownAndPowerOff();
+            }
+        } else if (u_bat >= (BAT_SOC10_V + BAT_SOC10_HYST)) {
+            // Low-Latch wieder freigeben
+            soc_low_latched = false;
+            t_cond_start_bat_low = 0;
+        }
+
+        // 3) >~50% SoC → Hauptsystem einschalten (nur wenn nicht gerade im Shutdown/Aus)
+        if (u_bat >= BAT_SOC50_V && mainSys == MainState::Off && !soc_low_latched) {
+            if (t_cond_start_bat_high == 0)
+                t_cond_start_bat_high = now;
+            if ((now - t_cond_start_bat_high) >= STABLE_REQ_MS && !soc_high_latched) {
+                soc_high_latched = true;
+                mainOnSequence();
+            }
+        } else if (u_bat <= (BAT_SOC50_V - BAT_SOC50_HYST)) {
+            soc_high_latched = false;
+            t_cond_start_bat_high = 0;
+        }
     }
 
-    // ---------------- SoC-LOGIK (über Batterie-Ruhespannung) ----------------
-    // 2) <~10% SoC → Pi sauber herunterfahren, dann XL4015 aus
-    static bool soc_low_latched = false;
-    static bool soc_high_latched = false;
-
-    // Low-Bedingung
-    if (u_bat <= BAT_SOC10_V) {
-        if (t_cond_start_bat_low == 0)
-            t_cond_start_bat_low = now;
-        if ((now - t_cond_start_bat_low) >= STABLE_REQ_MS && !soc_low_latched) {
-            soc_low_latched = true;
-            // Pi Shutdown anstoßen; Power-Off folgt per tickPiShutdown()
-            requestPiShutdownAndPowerOff();
-        }
-    } else if (u_bat >= (BAT_SOC10_V + BAT_SOC10_HYST)) {
-        // Low-Latch wieder freigeben
-        soc_low_latched = false;
-        t_cond_start_bat_low = 0;
-    }
-
-    // Während Pi-Shutdown ggf. Hauptsystem aus schalten, sobald ACK/Timeout
+    // Während Pi-Shutdown ggf. Hauptsystem aus schalten (unabhängig von Averaging)
     tickPiShutdown();
-
-    // 3) >~50% SoC → Hauptsystem einschalten (nur wenn nicht gerade im Shutdown/Aus)
-    if (u_bat >= BAT_SOC50_V && mainSys == MainState::Off && !soc_low_latched) {
-        if (t_cond_start_bat_high == 0)
-            t_cond_start_bat_high = now;
-        if ((now - t_cond_start_bat_high) >= STABLE_REQ_MS && !soc_high_latched) {
-            soc_high_latched = true;
-            mainOnSequence();
-        }
-    } else if (u_bat <= (BAT_SOC50_V - BAT_SOC50_HYST)) {
-        soc_high_latched = false;
-        t_cond_start_bat_high = 0;
-    }
 
     // Precharge-Phase abarbeiten
     tickPrecharge();
