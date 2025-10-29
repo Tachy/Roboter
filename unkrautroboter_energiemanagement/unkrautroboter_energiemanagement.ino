@@ -56,7 +56,6 @@ const uint8_t LED_YELLOW = 11; // LED gelb
 const uint8_t LED_GREEN = 12;  // LED grün
 
 const uint8_t PI_SHDN_PIN = 13; // Ausgang: HIGH → Pi soll Shutdown starten
-const uint8_t PI_ACK_PIN = 14;  // Eingang: HIGH → Pi heruntergefahren (optional, sonst Pullup)
 
 const uint8_t ADC_BAT = A1;
 const uint8_t ADC_PV = A2;
@@ -114,8 +113,8 @@ const uint32_t PV_RECONNECT_HOLD_MS = 120000; // 120 s stabil oberhalb
 // ========================= Zeiten & Pulse =========================
 const uint16_t RELAY_PULSE_MS = 40;
 const uint32_t PRECHARGE_MS = 400;
-const uint32_t PI_SHUTDOWN_HOLD_MS = 1000;
-const uint32_t PI_SHUTDOWN_WAIT_MS = 60000; // 60 s auf Pi-ACK warten
+const uint32_t PI_SHUTDOWN_HOLD_MS = 1500;
+const uint32_t PI_SHUTDOWN_WAIT_MS = 30000; // 30 s warten
 
 const uint32_t STABLE_REQ_MS = 3000; // für SoC-Bedingungen
 
@@ -234,9 +233,9 @@ void requestPiShutdownAndPowerOff() {
 void tickPiShutdown() {
     if (mainSys != MainState::ShuttingDown)
         return;
-    bool ack = (digitalRead(PI_ACK_PIN) == HIGH); // ggf. invertieren/ändern, je nach Pi-Schaltung
-    bool timeout = (millis() - t_pi_shutdown) >= PI_SHUTDOWN_WAIT_MS;
-    if (ack || timeout) {
+    // Ohne ACK-Abfrage: nach konfigurierter Wartezeit (PI_SHUTDOWN_WAIT_MS)
+    // automatisch abschalten.
+    if ((millis() - t_pi_shutdown) >= PI_SHUTDOWN_WAIT_MS) {
         mainOffSequence();
     }
 }
@@ -258,7 +257,6 @@ void setup() {
 
     pinMode(PI_SHDN_PIN, OUTPUT);
     digitalWrite(PI_SHDN_PIN, LOW);
-    pinMode(PI_ACK_PIN, INPUT_PULLUP); // optional; wenn ungenutzt bleibt HIGH
 
     pinMode(ADC_BAT, INPUT);
     pinMode(ADC_PV, INPUT);
