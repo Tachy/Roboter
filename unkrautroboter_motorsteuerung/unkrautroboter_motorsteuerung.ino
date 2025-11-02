@@ -1,4 +1,20 @@
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 #include <ArduinoJson.h>
+#include <Wire.h>
+
+// OLED configuration (AZ-Delivery 1.3" 128x64 I2C)
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Simple 21x8 text buffer (6x8 font => 21 cols x 8 rows)
+static char oled_lines[8][22]; // 21 chars + NUL
+static uint8_t oled_line_count = 0;
+static char oled_cur[22];
+static uint8_t oled_cur_len = 0;
+
 // === KONSTANTEN ===
 #define PWM_MIN 60
 #define MAX_KOORDINATEN 50
@@ -60,6 +76,8 @@ Mode currentMode = WAITING_FOR_START; // Startet im Wartezustand
 #define ENCODER_BRUSH_A 27 // Polling (kein Interrupt)
 #define ENCODER_BRUSH_B 26
 
+// Pins für Serial 0 sind fest: 0 (RX), 1 (TX)
+
 // Bürstenmotor
 #define BRUSH_CPR 211.2
 #define BRUSH_TARGET_RPM 2200
@@ -94,6 +112,64 @@ volatile long encoderBrush = 0;
 
 // --- 18 kHz PWM-Initialisierung für alle 16-Bit-Timer (1,3,4,5) inkl. Bürste ---
 const uint16_t MOTOR_PWM_TOP = 888; // ~18 kHz bei 16 MHz, N=1
+
+// Push a full line into the circular buffer (scrolling)
+void oledPushLine(const char *s) {
+    // truncate to 21 chars
+    char tmp[22];
+    strncpy(tmp, s, 21);
+    tmp[21] = '\0';
+
+    if (oled_line_count < 8) {
+        strncpy(oled_lines[oled_line_count++], tmp, 22);
+    } else {
+        // shift up
+        for (int i = 0; i < 7; i++)
+            strncpy(oled_lines[i], oled_lines[i + 1], 22);
+        strncpy(oled_lines[7], tmp, 22);
+    }
+
+    // redraw
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    for (uint8_t i = 0; i < oled_line_count; i++) {
+        display.setCursor(0, i * 8);
+        display.print(oled_lines[i]);
+    }
+    display.display();
+}
+
+// Append text to current line (no newline)
+void debug(const char *s) {
+    if (!s)
+        return;
+    while (*s) {
+        if (oled_cur_len >= 21)
+            break;
+        oled_cur[oled_cur_len++] = *s++;
+    }
+    oled_cur[oled_cur_len] = '\0';
+}
+
+// Append and push as a new line (like println)
+void debugln(const char *s) {
+    if (s && *s)
+        debug(s);
+    // push current line
+    if (oled_cur_len == 0) {
+        // empty, push empty or given string
+        if (s && *s)
+            oledPushLine(s);
+        else
+            oledPushLine("");
+    } else {
+        oledPushLine(oled_cur);
+    }
+    // reset current buffer
+    oled_cur_len = 0;
+    oled_cur[0] = '\0';
+}
 
 void initMotorPWM18kHz() {
     // Timer1: Pins 11 (OC1A), 12 (OC1B)
@@ -221,9 +297,17 @@ void isrEncoderBrush() { encoderBrush++; }
 
 void setup() {
 
-    Serial.begin(115200);  // Debug-Ausgaben für die IDE
-    Serial2.begin(115200); // Verbindung zum Raspberry Pi
-    Serial.println("Programm gestartet");
+    // Serial (USB) debug disabled for this module - use OLED display instead
+    Serial.begin(115200); // Verbindung zum Raspberry Pi
+
+    // Init OLED
+    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+        // display init failed - nothing we can do, but continue
+    }
+    display.clearDisplay();
+    oled_line_count = 0;
+    oled_cur_len = 0;
+    debugln("Programm gestartet");
 
     pinMode(RPWM_L, OUTPUT);
     pinMode(LPWM_L, OUTPUT);
@@ -259,7 +343,7 @@ void setup() {
 }
 
 void kalibriereX() {
-    Serial.println("Kalibriere X");
+    debugln("Kalibriere X");
     while (digitalRead(END_X_L) == HIGH) {
         motorAnalogWrite(RPWM_X, 0);
         motorAnalogWrite(LPWM_X, PWM_MIN + 20);
@@ -268,11 +352,11 @@ void kalibriereX() {
     motorAnalogWrite(RPWM_X, 0);
     motorAnalogWrite(LPWM_X, 0);
     encoderX = 0;
-    Serial.println("X kalibriert auf 0 mm (links)");
+    debugln("X kalibriert auf 0 mm (links)");
 }
 
 void kalibriereZ() {
-    Serial.println("Kalibriere Z");
+    debugln("Kalibriere Z");
     while (digitalRead(END_Z_O) == HIGH) {
         motorAnalogWrite(RPWM_Z, PWM_MIN + 20);
         motorAnalogWrite(LPWM_Z, 0);
@@ -281,7 +365,7 @@ void kalibriereZ() {
     motorAnalogWrite(RPWM_Z, 0);
     motorAnalogWrite(LPWM_Z, 0);
     encoderZ = 0;
-    Serial.println("Z kalibriert auf 0 mm (oben)");
+    debugln("Z kalibriert auf 0 mm (oben)");
 }
 
 void setzeXPosition(float zielPos_mm) {
@@ -315,17 +399,17 @@ void setzeXPosition(float zielPos_mm) {
     motorAnalogWrite(LPWM_X, 0);
     // Hinweis, falls Endschalter erreicht wurde
     if (vorwaerts && digitalRead(END_X_R) == LOW) {
-        Serial.println("X: Rechter Endschalter erreicht – vorzeitig gestoppt");
+        debugln("X: Rechter Endschalter erreicht - gestoppt");
     } else if (!vorwaerts && digitalRead(END_X_L) == LOW) {
-        Serial.println("X: Linker Endschalter erreicht – vorzeitig gestoppt");
+        debugln("X: Linker Endschalter erreicht - gestoppt");
     }
-    Serial.print("X gesetzt auf: ");
-    Serial.print(zielPos_mm);
-    Serial.println(" mm");
-    Serial.print("Impulsstand Ist: ");
-    Serial.print(encoderX);
-    Serial.print(" / Impulsstand Soll: ");
-    Serial.println(zielAbsolut);
+    {
+        char tmp[64];
+        snprintf(tmp, sizeof(tmp), "X gesetzt auf: %.1f mm", zielPos_mm);
+        debugln(tmp);
+        snprintf(tmp, sizeof(tmp), "Impuls Ist: %ld / Soll: %ld", encoderX, zielAbsolut);
+        debugln(tmp);
+    }
 }
 
 // Z-Achse absolut auf Zielposition in mm verfahren (analog zu setzeXPosition)
@@ -370,17 +454,17 @@ void setzeZPosition(float zielPos_mm) {
     motorAnalogWrite(LPWM_Z, 0);
     // Hinweis, falls Endschalter erreicht wurde
     if (vorwaerts && digitalRead(END_Z_U) == LOW) {
-        Serial.println("Z: Unterer Endschalter erreicht – vorzeitig gestoppt");
+        debugln("Z: Unterer Endschalter erreicht - gestoppt");
     } else if (!vorwaerts && digitalRead(END_Z_O) == LOW) {
-        Serial.println("Z: Oberer Endschalter erreicht – vorzeitig gestoppt");
+        debugln("Z: Oberer Endschalter erreicht - gestoppt");
     }
-    Serial.print("Z gesetzt auf: ");
-    Serial.print(zielPos_mm);
-    Serial.println(" mm");
-    Serial.print("Impulsstand Ist: ");
-    Serial.print(encoderZ);
-    Serial.print(" / Impulsstand Soll: ");
-    Serial.println(zielAbsolut);
+    {
+        char tmp[64];
+        snprintf(tmp, sizeof(tmp), "Z gesetzt auf: %.1f mm", zielPos_mm);
+        debugln(tmp);
+        snprintf(tmp, sizeof(tmp), "Impuls Ist: %ld / Soll: %ld", encoderZ, zielAbsolut);
+        debugln(tmp);
+    }
 }
 
 unsigned long lastBrushCheck = 0;
@@ -445,9 +529,11 @@ void senkeBuersteZuPosition(float zielPos_mm) {
 
             float rpm = getBrushRPM();
             if (rpm > 0 && rpm < MIN_RPM) {
-                Serial.print("Drehzahl zu niedrig (");
-                Serial.print(rpm);
-                Serial.println("), fahre 10 mm nach oben");
+                {
+                    char tmp[64];
+                    snprintf(tmp, sizeof(tmp), "Drehzahl zu niedrig (%.0f), fahre 10 mm nach oben", rpm);
+                    debugln(tmp);
+                }
 
                 drehzahlAbfall = true;
 
@@ -479,13 +565,13 @@ void senkeBuersteZuPosition(float zielPos_mm) {
     motorAnalogWrite(LPWM_Z, 0);
 
     // Fahre immer auf Position 10 mm von oben (Impulsziel = encoderZ - delta)
-    Serial.println("Fahre auf Position 10 mm (von oben)");
+    debugln("Fahre auf Position 10 mm (von oben)");
     setzeZPosition(10);
 
     if (erfolgreich) {
-        Serial.println("Ziel erreicht und zurück auf 10 mm.");
+        debugln("Ziel erreicht und zurück auf 10 mm.");
     } else {
-        Serial.println("Ziel nicht erreicht nach 3 Versuchen. Position 10 mm angefahren.");
+        debugln("Ziel nicht erreicht nach 3 Versuchen. Position 10 mm angefahren.");
     }
 }
 
@@ -528,7 +614,7 @@ void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
     motorAnalogWrite(LPWM_L, 0);
     motorAnalogWrite(RPWM_R, 0);
     motorAnalogWrite(LPWM_R, 0);
-    Serial.println("Fahrt beendet");
+    debugln("Fahrt beendet");
 }
 
 void anfrageUndAbarbeiten() {
@@ -538,9 +624,9 @@ void anfrageUndAbarbeiten() {
     setzeZPosition(10);
 
     aktuelleY_mm = 0;
-    Serial2.println("GETXY");
-    // Debug: mirror to USB serial for IDE
     Serial.println("GETXY");
+    // Debug: mirror to OLED display
+    debugln("GETXY");
 
     zielCount = 0;
     unsigned long start = millis();
@@ -567,9 +653,11 @@ void anfrageUndAbarbeiten() {
         }
     }
 
-    Serial.print("Empfangen: ");
-    Serial.print(zielCount);
-    Serial.println(" Koordinaten.");
+    {
+        char tmp[64];
+        snprintf(tmp, sizeof(tmp), "Empfangen: %d Koordinaten.", zielCount);
+        debugln(tmp);
+    }
 
     for (int i = 0; i < zielCount; i++) {
         float zielX = ziele[i].x_mm;
@@ -590,8 +678,8 @@ void anfrageUndAbarbeiten() {
 
 // Liest eine Zeile von Serial1 und gibt true zurück, wenn eine vollständige Zeile gelesen wurde
 bool readSerialLine(String &buffer) {
-    while (Serial2.available()) {
-        char c = Serial2.read();
+    while (Serial.available()) {
+        char c = Serial.read();
 
         // Zeile vollständig wenn \n empfangen
         if (c == '\n') {
@@ -609,7 +697,7 @@ bool readSerialLine(String &buffer) {
         // Buffer-Überlauf: Verwerfe alles bis zum nächsten Zeilenende
         if (buffer.length() >= MAX_CMD_LENGTH) {
             buffer = "";
-            while (Serial2.available() && Serial2.read() != '\n')
+            while (Serial.available() && Serial.read() != '\n')
                 ;
             return false;
         }
@@ -626,23 +714,26 @@ void processSerialCommand() {
     // Verarbeite nur vollständige Zeilen
     if (lineComplete) {
         // Debug-Ausgabe
-        Serial.print("Empfangener Befehl: ");
-        Serial.println(cmdBuffer);
+        {
+            char tmp[128];
+            snprintf(tmp, sizeof(tmp), "Empfangener Befehl: %s", cmdBuffer.c_str());
+            debugln(tmp);
+        }
 
         // Befehl auswerten basierend auf Keywords (indexOf >= 0 bedeutet "gefunden")
         if (cmdBuffer.indexOf("START") >= 0) {
             if (currentMode == WAITING_FOR_START) {
                 currentMode = MANUAL;
-                Serial.println("START empfangen - Wechsel zu MANUAL Modus");
+                debugln("START empfangen - Wechsel zu MANUAL Modus");
             }
         }
 
         if (cmdBuffer.indexOf("MODE:AUTO") >= 0) {
             currentMode = AUTO;
-            Serial.println("Modus gewechselt zu AUTO");
+            debugln("Modus gewechselt zu AUTO");
         } else if (cmdBuffer.indexOf("MODE:MANUAL") >= 0) {
             currentMode = MANUAL;
-            Serial.println("Modus gewechselt zu MANUAL");
+            debugln("Modus gewechselt zu MANUAL");
         }
 
         // Format: JOYSTICK:X=-48,Y=-54[,B=3]   (optionales Button-Feld B=)
@@ -687,10 +778,11 @@ void processSerialCommand() {
 
 void processJoystickCommand(int x, int y) {
     // Debug-Ausgabe
-    Serial.print("Joystick: X=");
-    Serial.print(x);
-    Serial.print(" Y=");
-    Serial.println(y);
+    {
+        char tmp[64];
+        snprintf(tmp, sizeof(tmp), "Joystick: X=%d Y=%d", x, y);
+        debugln(tmp);
+    }
 
     // Normalisiere x und y auf -1.0 bis 1.0
     float xNorm = x / 100.0;
@@ -743,10 +835,11 @@ void processJoystickCommand(int x, int y) {
     }
 
     // Debug-Ausgabe der Motorwerte
-    Serial.print("Motor PWM - Links: ");
-    Serial.print(pwmLeft);
-    Serial.print(" Rechts: ");
-    Serial.println(pwmRight);
+    {
+        char tmp[64];
+        snprintf(tmp, sizeof(tmp), "Motor PWM - Links: %d Rechts: %d", pwmLeft, pwmRight);
+        debugln(tmp);
+    }
 }
 
 // Manuelle Steuerung für X- und Z-Motoren mittels Joystick (Button 3 aktiviert)
@@ -811,10 +904,11 @@ void processJoystickManualXZ(int x, int y) {
     }
 
     // Debug
-    Serial.print("Manual XZ PWM: X=");
-    Serial.print(pwmX);
-    Serial.print(" Z=");
-    Serial.println(pwmZ);
+    {
+        char tmp[64];
+        snprintf(tmp, sizeof(tmp), "Manual XZ PWM: X=%d Z=%d", pwmX, pwmZ);
+        debugln(tmp);
+    }
 }
 
 // Status-JSON alle 5 Sekunden senden, egal wo im Code
@@ -845,9 +939,9 @@ void sendeStatusJson() {
     char buffer[128];
     size_t n = serializeJson(doc, buffer);
     buffer[n] = '\0';
-    Serial2.println(buffer);
-    // Debug: also print forwarded buffer to USB serial
     Serial.println(buffer);
+    // Debug: also print forwarded buffer to OLED
+    debugln(buffer);
 }
 
 void loop() {
@@ -875,7 +969,7 @@ void loop() {
         // Im Wartezustand blinken wir eine LED oder geben periodisch eine Nachricht aus
         static unsigned long lastBlink = 0;
         if (millis() - lastBlink > 1000) { // Jede Sekunde
-            Serial.println("Warte auf START Signal...");
+            debugln("Warte auf START Signal...");
             lastBlink = millis();
         }
     } else if (currentMode == AUTO) {
