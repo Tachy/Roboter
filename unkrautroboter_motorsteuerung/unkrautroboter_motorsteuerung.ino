@@ -171,6 +171,27 @@ void debugln(const char *s) {
     oled_cur[0] = '\0';
 }
 
+// Move cursor one line up so the next debug/debugln overwrites the previous line.
+// Implementation: copy last displayed line into the current-line buffer and remove
+// it from the displayed lines, then redraw. The next debug()/debugln() will
+// append/replace that line.
+void debugCursorUp() {
+    if (oled_line_count == 0) {
+        // nothing to move up to -> clear current buffer only
+        oled_cur_len = 0;
+        oled_cur[0] = '\0';
+        return;
+    }
+
+    // copy last displayed line into current buffer (no visual change)
+    strncpy(oled_cur, oled_lines[oled_line_count - 1], 21);
+    oled_cur[21] = '\0';
+    oled_cur_len = strlen(oled_cur);
+
+    // remove last line from buffer so next debug/debugln will overwrite that row
+    oled_line_count--;
+}
+
 void initMotorPWM18kHz() {
     // Timer1: Pins 11 (OC1A), 12 (OC1B)
     TCCR1A = 0;
@@ -343,7 +364,7 @@ void setup() {
 }
 
 void kalibriereX() {
-    debugln("Kalibriere X");
+    debug("Kalibriere X...");
     while (digitalRead(END_X_L) == HIGH) {
         motorAnalogWrite(RPWM_X, 0);
         motorAnalogWrite(LPWM_X, PWM_MIN + 20);
@@ -352,11 +373,11 @@ void kalibriereX() {
     motorAnalogWrite(RPWM_X, 0);
     motorAnalogWrite(LPWM_X, 0);
     encoderX = 0;
-    debugln("X kalibriert auf 0 mm (links)");
+    debugln("OK.");
 }
 
 void kalibriereZ() {
-    debugln("Kalibriere Z");
+    debug("Kalibriere Z...");
     while (digitalRead(END_Z_O) == HIGH) {
         motorAnalogWrite(RPWM_Z, PWM_MIN + 20);
         motorAnalogWrite(LPWM_Z, 0);
@@ -365,7 +386,7 @@ void kalibriereZ() {
     motorAnalogWrite(RPWM_Z, 0);
     motorAnalogWrite(LPWM_Z, 0);
     encoderZ = 0;
-    debugln("Z kalibriert auf 0 mm (oben)");
+    debugln("OK.");
 }
 
 void setzeXPosition(float zielPos_mm) {
@@ -399,9 +420,9 @@ void setzeXPosition(float zielPos_mm) {
     motorAnalogWrite(LPWM_X, 0);
     // Hinweis, falls Endschalter erreicht wurde
     if (vorwaerts && digitalRead(END_X_R) == LOW) {
-        debugln("X: Rechter Endschalter erreicht - gestoppt");
+        debugln("X: Ende rechts");
     } else if (!vorwaerts && digitalRead(END_X_L) == LOW) {
-        debugln("X: Linker Endschalter erreicht - gestoppt");
+        debugln("X: Ende links");
     }
     {
         char tmp[64];
@@ -454,9 +475,9 @@ void setzeZPosition(float zielPos_mm) {
     motorAnalogWrite(LPWM_Z, 0);
     // Hinweis, falls Endschalter erreicht wurde
     if (vorwaerts && digitalRead(END_Z_U) == LOW) {
-        debugln("Z: Unterer Endschalter erreicht - gestoppt");
+        debugln("Z: Ende unten");
     } else if (!vorwaerts && digitalRead(END_Z_O) == LOW) {
-        debugln("Z: Oberer Endschalter erreicht - gestoppt");
+        debugln("Z: Ende oben");
     }
     {
         char tmp[64];
@@ -531,7 +552,7 @@ void senkeBuersteZuPosition(float zielPos_mm) {
             if (rpm > 0 && rpm < MIN_RPM) {
                 {
                     char tmp[64];
-                    snprintf(tmp, sizeof(tmp), "Drehzahl zu niedrig (%.0f), fahre 10 mm nach oben", rpm);
+                    snprintf(tmp, sizeof(tmp), "RPM < %.0f.", MIN_RPM);
                     debugln(tmp);
                 }
 
@@ -565,14 +586,9 @@ void senkeBuersteZuPosition(float zielPos_mm) {
     motorAnalogWrite(LPWM_Z, 0);
 
     // Fahre immer auf Position 10 mm von oben (Impulsziel = encoderZ - delta)
-    debugln("Fahre auf Position 10 mm (von oben)");
-    setzeZPosition(10);
-
-    if (erfolgreich) {
-        debugln("Ziel erreicht und zurück auf 10 mm.");
-    } else {
-        debugln("Ziel nicht erreicht nach 3 Versuchen. Position 10 mm angefahren.");
-    }
+    debug("Fahre hoch...");
+    setzeZPosition(3); // 10 mm + Sicherheitsabstand
+    debugln("OK.");
 }
 
 void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
@@ -614,7 +630,7 @@ void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
     motorAnalogWrite(LPWM_L, 0);
     motorAnalogWrite(RPWM_R, 0);
     motorAnalogWrite(LPWM_R, 0);
-    debugln("Fahrt beendet");
+    debugln("ZIel erreicht.");
 }
 
 void anfrageUndAbarbeiten() {
@@ -626,7 +642,7 @@ void anfrageUndAbarbeiten() {
     aktuelleY_mm = 0;
     Serial.println("GETXY");
     // Debug: mirror to OLED display
-    debugln("GETXY");
+    debugln("Sende GETXY");
 
     zielCount = 0;
     unsigned long start = millis();
@@ -713,27 +729,20 @@ void processSerialCommand() {
 
     // Verarbeite nur vollständige Zeilen
     if (lineComplete) {
-        // Debug-Ausgabe
-        {
-            char tmp[128];
-            snprintf(tmp, sizeof(tmp), "Empfangener Befehl: %s", cmdBuffer.c_str());
-            debugln(tmp);
-        }
-
         // Befehl auswerten basierend auf Keywords (indexOf >= 0 bedeutet "gefunden")
         if (cmdBuffer.indexOf("START") >= 0) {
             if (currentMode == WAITING_FOR_START) {
                 currentMode = MANUAL;
-                debugln("START empfangen - Wechsel zu MANUAL Modus");
+                debugln("RCD: START -> MANUAL");
             }
         }
 
         if (cmdBuffer.indexOf("MODE:AUTO") >= 0) {
             currentMode = AUTO;
-            debugln("Modus gewechselt zu AUTO");
+            debugln("RCD: AUTO");
         } else if (cmdBuffer.indexOf("MODE:MANUAL") >= 0) {
             currentMode = MANUAL;
-            debugln("Modus gewechselt zu MANUAL");
+            debugln("RCD: MANUAL");
         }
 
         // Format: JOYSTICK:X=-48,Y=-54[,B=3]   (optionales Button-Feld B=)
@@ -778,12 +787,13 @@ void processSerialCommand() {
 
 void processJoystickCommand(int x, int y) {
     // Debug-Ausgabe
-    {
-        char tmp[64];
-        snprintf(tmp, sizeof(tmp), "Joystick: X=%d Y=%d", x, y);
-        debugln(tmp);
-    }
-
+    /*
+        {
+            char tmp[64];
+            snprintf(tmp, sizeof(tmp), "Joy: X=%d Y=%d", x, y);
+            debugln(tmp);
+        }
+    */
     // Normalisiere x und y auf -1.0 bis 1.0
     float xNorm = x / 100.0;
     float yNorm = y / 100.0;
@@ -837,7 +847,7 @@ void processJoystickCommand(int x, int y) {
     // Debug-Ausgabe der Motorwerte
     {
         char tmp[64];
-        snprintf(tmp, sizeof(tmp), "Motor PWM - Links: %d Rechts: %d", pwmLeft, pwmRight);
+        snprintf(tmp, sizeof(tmp), "Motor L: %d R: %d", pwmLeft, pwmRight);
         debugln(tmp);
     }
 }
@@ -906,7 +916,7 @@ void processJoystickManualXZ(int x, int y) {
     // Debug
     {
         char tmp[64];
-        snprintf(tmp, sizeof(tmp), "Manual XZ PWM: X=%d Z=%d", pwmX, pwmZ);
+        snprintf(tmp, sizeof(tmp), "Motor X/Z: X=%d Z=%d", pwmX, pwmZ);
         debugln(tmp);
     }
 }
@@ -969,7 +979,7 @@ void loop() {
         // Im Wartezustand blinken wir eine LED oder geben periodisch eine Nachricht aus
         static unsigned long lastBlink = 0;
         if (millis() - lastBlink > 1000) { // Jede Sekunde
-            debugln("Warte auf START Signal...");
+            debugln("Warte auf START...");
             lastBlink = millis();
         }
     } else if (currentMode == AUTO) {
