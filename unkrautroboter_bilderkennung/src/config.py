@@ -19,7 +19,7 @@ UDP_IP = "0.0.0.0"  # Hört auf alle Schnittstellen
 UDP_CONTROL_PORT = 5005  # Port für Modusumschaltung
 UDP_JOYSTICK_PORT = 5006  # Port für Joystick-Kommandos
 UDP_HEARTBEAT_PORT = 5007  # Port für Heartbeat-Messages
-UDP_STATUS_BROADCAST_PORT = 5008  # Port für Status-Broadcast
+# UDP_STATUS_BROADCAST_PORT wurde entfernt (nicht verwendet)
 HEARTBEAT_TIMEOUT = 5.0  # Sekunden, wie lange der Stream nach letztem Heartbeat läuft
 
 # Optionale Whitelist für UDP-Steuerung/Joystick (Absender-IP-Adressen oder CIDR-Netze)
@@ -52,7 +52,11 @@ UPLOAD_DIR = "./upload/"
 # GPIO-Pin (BCM) an der Raspberry Pi, der mit dem RESET-Pin des Mega verbunden ist.
 # Wenn None, wird kein Reset per GPIO durchgeführt. Hinweis: RESET ist aktiv LOW.
 FW_RESET_GPIO = 23  # z.B. 24
-SHUTDOWN_GPIO = 24  # GPIO-Pin für kontrolliertes Herunterfahren (None deaktiviert)
+# Firmware reset tuning (seconds)
+# Duration die RESET-Leitung kurz aktivieren (Sekunden)
+FW_RESET_PULSE_SEC = 0.1
+# Verzögerung nach dem Loslassen der RESET-Leitung bevor avrdude startet (Sekunden)
+FW_RESET_POST_PULSE_WAIT = 0.1
 
 # Weltkoordinaten: optionaler XY-Versatz (mm), um den Ursprung zu verschieben (z. B. unter die linke Bürste)
 # Beispiel: WORLD_OFFSET_XY_MM = (x_mm, y_mm) – wird von pixel_to_world subtrahiert

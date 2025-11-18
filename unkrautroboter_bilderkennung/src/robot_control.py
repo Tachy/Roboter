@@ -22,6 +22,8 @@ from .calibration import CalibrationSession
 from . import geometry
 import subprocess
 import shutil
+import sys
+import importlib
 
 # Logger einrichten
 logger = logging.getLogger("robot_control")
@@ -512,71 +514,105 @@ class RobotControl:
             except Exception:
                 pass
 
-            # Optional: toggle RESET via GPIO so Mega bootloader accepts upload
+            # Optional: einfacher GPIO-Reset (einmalig, kein Retry)
             try:
                 if getattr(config, "FW_RESET_GPIO", None) is not None:
                     gpio_pin = int(config.FW_RESET_GPIO)
                     logger.info(f"Versuche Mega-Reset via GPIO {gpio_pin}")
+                    fw_pulse = getattr(config, "FW_RESET_PULSE_SEC", 0.05)
+                    fw_post_wait = getattr(config, "FW_RESET_POST_PULSE_WAIT", 0.1)
                     try:
                         import RPi.GPIO as GPIO  # type: ignore
 
                         GPIO.setmode(GPIO.BCM)
-                        GPIO.setup(gpio_pin, GPIO.OUT, initial=GPIO.HIGH)
-                        # Reset aktiv LOW: pulse LOW briefly
-                        GPIO.output(gpio_pin, GPIO.LOW)
-                        time.sleep(0.05)
-                        GPIO.output(gpio_pin, GPIO.HIGH)
-                        time.sleep(0.1)
-                        GPIO.cleanup(gpio_pin)
-                    except Exception:
-                        # Fallback auf gpiozero falls vorhanden
+                        # Für Optokoppler: idle LOW, Puls HIGH
+                        GPIO.setup(gpio_pin, GPIO.OUT, initial=GPIO.LOW)
+                        # Kurzer Countdown, damit du manuell resetten kannst
+                        countdown = 10
+                        logger.info(
+                            f"Automatischer GPIO-Reset in {countdown}s (Pin BCM {gpio_pin})."
+                            " Falls du manuell resetten willst: jetzt tun."
+                        )
                         try:
-                            from gpiozero import OutputDevice  # type: ignore
-
-                            dev = OutputDevice(
-                                gpio_pin, active_high=True, initial_value=True
+                            for sec in range(countdown, 0, -1):
+                                logger.info(f"Reset in {sec}s...")
+                                time.sleep(1)
+                        except KeyboardInterrupt:
+                            logger.info(
+                                "Countdown für automatischen Reset abgebrochen durch KeyboardInterrupt."
                             )
-                            dev.off()
-                            time.sleep(0.05)
-                            dev.on()
-                            time.sleep(0.1)
-                            dev.close()
-                        except Exception as e:
-                            logger.warning(f"GPIO-Reset nicht möglich: {e}")
+                        # Setze kurz HIGH, dann wieder LOW
+                        GPIO.output(gpio_pin, GPIO.HIGH)
+                        time.sleep(float(fw_pulse))
+                        GPIO.output(gpio_pin, GPIO.LOW)
+                        time.sleep(float(fw_post_wait))
+                        GPIO.cleanup(gpio_pin)
+                    except Exception as e_gpio:
+                        # Kein gpiozero-Fallback: nur RPi.GPIO verwenden, bei Fehler nur warnen
+                        logger.warning(
+                            "GPIO-Reset nicht möglich (RPi.GPIO): %s", str(e_gpio)
+                        )
             except Exception as e:
                 logger.warning(f"Fehler beim Versuch GPIO-Reset: {e}")
+
+            # Hinweis: Datei-basiertes Logging unter `state/` wurde entfernt.
+            # Der Persistenz-Ordner wird weiterhin für Modus-Persistenz verwendet.
 
             avrdude_cmd = [
                 "avrdude",
                 "-v",
-                "-patmega2560",
-                "-cwiring",
-                f"-P{config.SERIAL_PORT}",
-                f"-b{config.BAUDRATE}",
+                "-p",
+                "m2560",
+                "-c",
+                "wiring",
+                "-P",
+                f"{config.SERIAL_PORT}",
+                "-b",
+                f"{config.BAUDRATE}",
                 "-D",
-                f"-Uflash:w:{str(hexpath)}:i",
+                "-U",
+                f"flash:w:{str(hexpath)}:i",
             ]
             logger.info("Aufruf: %s", " ".join(avrdude_cmd))
-            proc = subprocess.run(
-                avrdude_cmd, capture_output=True, text=True, timeout=300
-            )
-            if proc.returncode == 0:
-                logger.info(f"Flash erfolgreich: {hexpath}")
-                target = hexpath.with_suffix(hexpath.suffix + ".uploaded")
-                shutil.move(str(hexpath), str(target))
-            else:
-                logger.error(
-                    f"avrdude failed: {proc.returncode}\n{proc.stdout}\n{proc.stderr}"
-                )
-                target = hexpath.with_suffix(hexpath.suffix + ".failed")
-                shutil.move(str(hexpath), str(target))
-        except subprocess.TimeoutExpired:
-            logger.error("avrdude Timeout beim Flashen")
-            target = hexpath.with_suffix(hexpath.suffix + ".failed")
+
             try:
-                shutil.move(str(hexpath), str(target))
-            except Exception:
-                pass
+                proc = subprocess.run(
+                    avrdude_cmd, capture_output=True, text=True, timeout=300
+                )
+
+                # Logge avrdude-Ausgabe ausschließlich über den Python-Logger.
+                try:
+                    if proc.stdout:
+                        logger.debug("avrdude STDOUT:\n%s", proc.stdout)
+                    if proc.stderr:
+                        if proc.returncode == 0:
+                            logger.warning("avrdude STDERR:\n%s", proc.stderr)
+                        else:
+                            logger.error("avrdude STDERR:\n%s", proc.stderr)
+                except Exception:
+                    logger.debug(
+                        "Fehler beim Loggen der avrdude-Ausgabe", exc_info=True
+                    )
+
+                if proc.returncode == 0:
+                    logger.info(f"Flash erfolgreich: {hexpath}")
+                    target = hexpath.with_suffix(hexpath.suffix + ".uploaded")
+                    shutil.move(str(hexpath), str(target))
+                else:
+                    logger.error(f"avrdude failed (returncode {proc.returncode})")
+                    target = hexpath.with_suffix(hexpath.suffix + ".failed")
+                    try:
+                        shutil.move(str(hexpath), str(target))
+                    except Exception:
+                        logger.debug("Konnte .hex nicht verschieben", exc_info=True)
+
+            except subprocess.TimeoutExpired:
+                logger.error("avrdude Timeout beim Flashen")
+                target = hexpath.with_suffix(hexpath.suffix + ".failed")
+                try:
+                    shutil.move(str(hexpath), str(target))
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"Fehler beim Flashen: {e}")
             target = hexpath.with_suffix(hexpath.suffix + ".failed")

@@ -52,25 +52,43 @@ class SerialManager:
         while self.running:
             try:
                 if self.serial.in_waiting:
-                    char = self.serial.read().decode(errors="ignore")
-                    logger.debug(f"Empfangenes Byte: 0x{ord(char):02x}")
+                    # Lese ein Roh-Byte und prüfe, ob überhaupt etwas gelesen wurde
+                    b = self.serial.read(1)
+                    if not b:
+                        # Kein Byte empfangen (Timeout) — kurz schlafen und weiter
+                        time.sleep(0.01)
+                        continue
+                    val = b[0]
+                    # Versuche die Darstellung als String (für Puffer/Zeilenbau)
+                    try:
+                        char = b.decode(errors="ignore")
+                    except Exception:
+                        char = ""
+                    logger.debug(f"Empfangenes Byte: 0x{val:02x}")
 
-                    if char == "\n":  # Zeilenende gefunden
-                        complete_command = (
-                            self.buffer.strip()
-                        )  # Entferne Whitespace und CR
-                        if complete_command:  # Ignoriere leere Zeilen
+                    # Zeilenende erfasst?
+                    if char == "\n":
+                        complete_command = self.buffer.strip()
+                        if complete_command:
                             logger.info(f"Kompletter Befehl: {complete_command}")
+                            # sichere Byte-Darstellung der kompletten Zeile
                             logger.debug(
                                 "Als Bytes: %s",
-                                " ".join(f"0x{ord(c):02x}" for c in complete_command),
+                                " ".join(
+                                    f"0x{bb:02x}"
+                                    for bb in complete_command.encode(
+                                        "utf-8", errors="replace"
+                                    )
+                                ),
                             )
                             self.received_lines.put(complete_command)
-                        self.buffer = ""  # Puffer zurücksetzen
+                        # Puffer zurücksetzen (auch beim leeren String)
+                        self.buffer = ""
                     else:
+                        # Normales Zeichen an Puffer anhängen
                         self.buffer += char
                 else:
-                    # Kurze Pause wenn keine Daten verfügbar
+                    # Keine Daten verfügbar -> kurz schlafen, um CPU-Load zu reduzieren
                     time.sleep(0.01)
             except Exception as e:
                 logger.error(

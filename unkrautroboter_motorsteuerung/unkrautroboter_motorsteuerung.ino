@@ -14,6 +14,8 @@ static char oled_lines[8][22]; // 21 chars + NUL
 static uint8_t oled_line_count = 0;
 static char oled_cur[22];
 static uint8_t oled_cur_len = 0;
+// Flag whether OLED init succeeded
+static bool oled_present = false;
 
 // === KONSTANTEN ===
 #define PWM_MIN 60
@@ -34,7 +36,7 @@ enum Mode {
     AUTO
 };
 
-Mode currentMode = WAITING_FOR_START; // Startet im Wartezustand
+Mode currentMode = MANUAL; // Startet im Wartezustand
 
 // Rad links
 #define RPWM_L 5
@@ -70,11 +72,23 @@ Mode currentMode = WAITING_FOR_START; // Startet im Wartezustand
 #define END_Z_O 29
 #define END_Z_U 30
 
+// Endschalter: true = NC (Normally Closed) wiring (pressed == HIGH),
+// false = NO (Normally Open) wiring (pressed == LOW)
+#define END_SWITCH_NC true
+
+// Helper: returns true when the end switch is currently pressed (according to wiring)
+static inline bool endPressed(uint8_t pin) {
+    if (END_SWITCH_NC)
+        return (digitalRead(pin) == HIGH);
+    else
+        return (digitalRead(pin) == LOW);
+}
+
 // Arduino-Pins Bürstenmotor
 #define PWM_BRUSH 46
 
-#define ENCODER_BRUSH_A 27 // Polling (kein Interrupt)
-#define ENCODER_BRUSH_B 26
+// Brush encoder (A/B)
+#define ENCODER_BRUSH_A 26 // Polling (kein Interrupt)
 
 // Pins für Serial 0 sind fest: 0 (RX), 1 (TX)
 
@@ -115,6 +129,12 @@ const uint16_t MOTOR_PWM_TOP = 888; // ~18 kHz bei 16 MHz, N=1
 
 // Push a full line into the circular buffer (scrolling)
 void oledPushLine(const char *s) {
+    if (!oled_present) {
+        // Fallback: print to Serial so debug output remains visible
+        if (s)
+            Serial.println(s);
+        return;
+    }
     // truncate to 21 chars
     char tmp[22];
     strncpy(tmp, s, 21);
@@ -133,8 +153,15 @@ void oledPushLine(const char *s) {
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
+    // Use 8 pixel row spacing (6x8 font) and clear each row before drawing
+    const uint8_t row_h = 8;
     for (uint8_t i = 0; i < oled_line_count; i++) {
-        display.setCursor(0, i * 8);
+        uint8_t y = i * row_h;
+        if (y >= SCREEN_HEIGHT)
+            break;
+        // clear the row area to avoid leftover pixels from previous longer lines
+        display.fillRect(0, y, SCREEN_WIDTH, row_h, SSD1306_BLACK);
+        display.setCursor(0, y);
         display.print(oled_lines[i]);
     }
     display.display();
@@ -144,6 +171,11 @@ void oledPushLine(const char *s) {
 void debug(const char *s) {
     if (!s)
         return;
+    if (!oled_present) {
+        // OLED not present, forward directly to Serial
+        Serial.print(s);
+        return;
+    }
     while (*s) {
         if (oled_cur_len >= 21)
             break;
@@ -154,6 +186,13 @@ void debug(const char *s) {
 
 // Append and push as a new line (like println)
 void debugln(const char *s) {
+    if (!oled_present) {
+        if (s)
+            Serial.println(s);
+        else
+            Serial.println();
+        return;
+    }
     if (s && *s)
         debug(s);
     // push current line
@@ -176,6 +215,11 @@ void debugln(const char *s) {
 // it from the displayed lines, then redraw. The next debug()/debugln() will
 // append/replace that line.
 void debugCursorUp() {
+    if (!oled_present) {
+        // no OLED -> nothing to do
+        return;
+    }
+
     if (oled_line_count == 0) {
         // nothing to move up to -> clear current buffer only
         oled_cur_len = 0;
@@ -241,11 +285,24 @@ void initMotorPWM18kHz() {
     OCR5A = 0;
     OCR5B = 0;
     OCR5C = 0;
+
+    // Ensure motors start in stopped state using the same inverted mapping
+    motorAnalogWrite(5, 255);
+    motorAnalogWrite(6, 255);
+    motorAnalogWrite(7, 255);
+    motorAnalogWrite(8, 255);
+    motorAnalogWrite(11, 255);
+    motorAnalogWrite(12, 255);
+    motorAnalogWrite(44, 255);
+    motorAnalogWrite(45, 255);
+    motorAnalogWrite(46, 255);
 }
 
 // PWM schreiben (0..255 auf 0..TOP abbilden)
 void motorAnalogWrite(uint8_t pin, uint8_t pwm) {
-    uint16_t val = (uint32_t)pwm * MOTOR_PWM_TOP / 255u;
+    // Inverted mapping: 255 -> stop (0 duty), 0 -> full duty
+    uint32_t inv = 255u - (uint32_t)pwm;
+    uint16_t val = (uint32_t)inv * MOTOR_PWM_TOP / 255u;
     switch (pin) {
     case 5:
         OCR3A = val;
@@ -275,13 +332,14 @@ void motorAnalogWrite(uint8_t pin, uint8_t pwm) {
         OCR5A = val;
         break; // Timer5, OC5A (Bürste)
     default:
-        analogWrite(pin, pwm); // Fallback
+        // Fallback: apply inverted mapping for 8-bit analogWrite as well
+        analogWrite(pin, (uint8_t)inv);
     }
 }
 
 // === ENCODER ISR ===
 
-// --- Polling-Funktion für ENCODER_BRUSH_A (Pin 27) ---
+// --- Polling-Funktion für ENCODER_BRUSH_A (Pin 31) ---
 void pollBrushEncoder() {
     static int lastBrushState = HIGH;
     int brushState = digitalRead(ENCODER_BRUSH_A);
@@ -322,10 +380,24 @@ void setup() {
     Serial.begin(115200); // Verbindung zum Raspberry Pi
 
     // Init OLED
-    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-        // display init failed - nothing we can do, but continue
+    // Try common I2C addresses for 128x64 displays (0x3C, 0x3D).
+    if (display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+        oled_present = true;
+        Serial.println("OLED init @0x3C OK");
+    } else if (display.begin(SSD1306_SWITCHCAPVCC, 0x3D)) {
+        oled_present = true;
+        Serial.println("OLED init @0x3D OK");
+    } else {
+        oled_present = false;
+        Serial.println("OLED init failed (no 0x3C/0x3D)");
     }
-    display.clearDisplay();
+
+    if (oled_present) {
+        display.clearDisplay();
+        display.setTextSize(1);
+        display.setTextColor(SSD1306_WHITE);
+        display.display();
+    }
     oled_line_count = 0;
     oled_cur_len = 0;
     debugln("Programm gestartet");
@@ -365,9 +437,10 @@ void setup() {
 
 void kalibriereX() {
     debug("Kalibriere X...");
-    while (digitalRead(END_X_L) == HIGH) {
-        motorAnalogWrite(RPWM_X, 0);
-        motorAnalogWrite(LPWM_X, PWM_MIN + 20);
+    // run until the left end switch is pressed
+    while (!endPressed(END_X_L)) {
+        motorAnalogWrite(RPWM_X, PWM_MIN + 20);
+        motorAnalogWrite(LPWM_X, 0);
         delay(10);
     }
     motorAnalogWrite(RPWM_X, 0);
@@ -378,7 +451,8 @@ void kalibriereX() {
 
 void kalibriereZ() {
     debug("Kalibriere Z...");
-    while (digitalRead(END_Z_O) == HIGH) {
+    // run until the top end switch is pressed
+    while (!endPressed(END_Z_O)) {
         motorAnalogWrite(RPWM_Z, PWM_MIN + 20);
         motorAnalogWrite(LPWM_Z, 0);
         delay(10);
@@ -400,8 +474,8 @@ void setzeXPosition(float zielPos_mm) {
     unsigned long totalZeit = (unsigned long)(abs(deltaImpulse) / IMPULSE_X_PRO_MM * 12.0) + RAMP_UP_TIME_MS + RAMP_DOWN_TIME_MS;
     unsigned long rampDownStart = totalZeit - RAMP_DOWN_TIME_MS;
 
-    while ((vorwaerts && encoderX < zielAbsolut && digitalRead(END_X_R) == HIGH) ||
-           (!vorwaerts && encoderX > zielAbsolut && digitalRead(END_X_L) == HIGH)) {
+    while ((vorwaerts && encoderX < zielAbsolut && !endPressed(END_X_R)) ||
+           (!vorwaerts && encoderX > zielAbsolut && !endPressed(END_X_L))) {
         unsigned long jetzt = millis();
         int pwm = PWM_MIN;
 
@@ -419,9 +493,9 @@ void setzeXPosition(float zielPos_mm) {
     motorAnalogWrite(RPWM_X, 0);
     motorAnalogWrite(LPWM_X, 0);
     // Hinweis, falls Endschalter erreicht wurde
-    if (vorwaerts && digitalRead(END_X_R) == LOW) {
+    if (vorwaerts && endPressed(END_X_R)) {
         debugln("X: Ende rechts");
-    } else if (!vorwaerts && digitalRead(END_X_L) == LOW) {
+    } else if (!vorwaerts && endPressed(END_X_L)) {
         debugln("X: Ende links");
     }
     {
@@ -447,8 +521,8 @@ void setzeZPosition(float zielPos_mm) {
     unsigned long totalZeit = (unsigned long)(abs(deltaImpulse) / IMPULSE_Z_PRO_MM * 12.0) + RAMP_UP_TIME_MS + RAMP_DOWN_TIME_MS;
     unsigned long rampDownStart = totalZeit - RAMP_DOWN_TIME_MS;
 
-    while ((vorwaerts && encoderZ < zielAbsolut && digitalRead(END_Z_U) == HIGH) ||
-           (!vorwaerts && encoderZ > zielAbsolut && digitalRead(END_Z_O) == HIGH)) {
+    while ((vorwaerts && encoderZ < zielAbsolut && !endPressed(END_Z_U)) ||
+           (!vorwaerts && encoderZ > zielAbsolut && !endPressed(END_Z_O))) {
         unsigned long jetzt = millis();
         int pwm = PWM_MIN;
 
@@ -474,9 +548,9 @@ void setzeZPosition(float zielPos_mm) {
     motorAnalogWrite(RPWM_Z, 0);
     motorAnalogWrite(LPWM_Z, 0);
     // Hinweis, falls Endschalter erreicht wurde
-    if (vorwaerts && digitalRead(END_Z_U) == LOW) {
+    if (vorwaerts && endPressed(END_Z_U)) {
         debugln("Z: Ende unten");
-    } else if (!vorwaerts && digitalRead(END_Z_O) == LOW) {
+    } else if (!vorwaerts && endPressed(END_Z_O)) {
         debugln("Z: Ende oben");
     }
     {
@@ -531,7 +605,7 @@ void senkeBuersteZuPosition(float zielPos_mm) {
 
         bool drehzahlAbfall = false;
 
-        while (encoderZ < zielImpulseZ && digitalRead(END_Z_U) == HIGH) {
+        while (encoderZ < zielImpulseZ && !endPressed(END_Z_U)) {
             unsigned long jetzt = millis();
             int pwm = PWM_MIN;
 
@@ -560,7 +634,7 @@ void senkeBuersteZuPosition(float zielPos_mm) {
 
                 // 10 mm nach oben (relativ zur aktuellen Position)
                 long rueckZiel = encoderZ - rueckImpulse10mm;
-                while (encoderZ > rueckZiel && digitalRead(END_Z_O) == HIGH) {
+                while (encoderZ > rueckZiel && !endPressed(END_Z_O)) {
                     motorAnalogWrite(RPWM_Z, PWM_MIN + 40);
                     motorAnalogWrite(LPWM_Z, 0);
                     pollBrushEncoder();
@@ -837,11 +911,11 @@ void processJoystickCommand(int x, int y) {
 
     // Rechts
     if (pwmRight > 0) {
-        motorAnalogWrite(RPWM_R, pwmRight);
-        motorAnalogWrite(LPWM_R, 0);
-    } else {
         motorAnalogWrite(RPWM_R, 0);
-        motorAnalogWrite(LPWM_R, -pwmRight);
+        motorAnalogWrite(LPWM_R, pwmRight);
+    } else {
+        motorAnalogWrite(RPWM_R, -pwmRight);
+        motorAnalogWrite(LPWM_R, 0);
     }
 
     // Debug-Ausgabe der Motorwerte
@@ -868,7 +942,7 @@ void processJoystickManualXZ(int x, int y) {
     if (pwmX > 0) {
         // vorwärts (rechts)
         // respektiere rechten Endschalter
-        if (digitalRead(END_X_R) == HIGH) {
+        if (!endPressed(END_X_R)) {
             motorAnalogWrite(RPWM_X, pwmX);
             motorAnalogWrite(LPWM_X, 0);
         } else {
@@ -877,7 +951,7 @@ void processJoystickManualXZ(int x, int y) {
         }
     } else if (pwmX < 0) {
         // rückwärts (links)
-        if (digitalRead(END_X_L) == HIGH) {
+        if (!endPressed(END_X_L)) {
             motorAnalogWrite(RPWM_X, 0);
             motorAnalogWrite(LPWM_X, -pwmX);
         } else {
@@ -892,7 +966,7 @@ void processJoystickManualXZ(int x, int y) {
     // Z-Achse: ENC_Z_A/B und END_Z_O (oben) / END_Z_U (unten)
     if (pwmZ > 0) {
         // Absenken (nach unten) -> respektiere unteren Endschalter END_Z_U
-        if (digitalRead(END_Z_U) == HIGH) {
+        if (!endPressed(END_Z_U)) {
             motorAnalogWrite(RPWM_Z, 0);
             motorAnalogWrite(LPWM_Z, pwmZ);
         } else {
@@ -901,7 +975,7 @@ void processJoystickManualXZ(int x, int y) {
         }
     } else if (pwmZ < 0) {
         // Anheben (nach oben) -> respektiere oberen Endschalter END_Z_O
-        if (digitalRead(END_Z_O) == HIGH) {
+        if (!endPressed(END_Z_O)) {
             motorAnalogWrite(RPWM_Z, -pwmZ);
             motorAnalogWrite(LPWM_Z, 0);
         } else {
@@ -950,8 +1024,6 @@ void sendeStatusJson() {
     size_t n = serializeJson(doc, buffer);
     buffer[n] = '\0';
     Serial.println(buffer);
-    // Debug: also print forwarded buffer to OLED
-    debugln(buffer);
 }
 
 void loop() {
@@ -963,13 +1035,13 @@ void loop() {
     // auch dann direkt reagieren, wenn Joystick-Nachrichten seltener eintreffen.
     // Reagiert mit der Loop-Frequenz (~10 ms).
     if (currentMode == MANUAL) {
-        // X-Achse Endschalter (LOW = gedrückt aufgrund INPUT_PULLUP)
-        if (digitalRead(END_X_L) == LOW || digitalRead(END_X_R) == LOW) {
+        // X-Achse Endschalter (NC wiring: pressed == HIGH)
+        if (endPressed(END_X_L) || endPressed(END_X_R)) {
             motorAnalogWrite(RPWM_X, 0);
             motorAnalogWrite(LPWM_X, 0);
         }
         // Z-Achse Endschalter
-        if (digitalRead(END_Z_O) == LOW || digitalRead(END_Z_U) == LOW) {
+        if (endPressed(END_Z_O) || endPressed(END_Z_U)) {
             motorAnalogWrite(RPWM_Z, 0);
             motorAnalogWrite(LPWM_Z, 0);
         }
