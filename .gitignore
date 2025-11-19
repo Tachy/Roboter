@@ -11,6 +11,7 @@ venv/
 
 env/
 build/
+unkrautroboter/build/
 develop-eggs/
 dist/
 downloads/
