@@ -295,7 +295,7 @@ def main() -> None:
             """
             # RPi.GPIO bevorzugt
             try:
-                import RPi.GPIO as GPIO
+                import RPi.GPIO as GPIO  # type: ignore
 
                 GPIO.setmode(GPIO.BCM)
                 if active == "high":
@@ -326,7 +326,7 @@ def main() -> None:
 
             # Fallback: gpiozero
             try:
-                from gpiozero import LED
+                from gpiozero import LED  # type: ignore
 
                 led = LED(pin)
                 try:
