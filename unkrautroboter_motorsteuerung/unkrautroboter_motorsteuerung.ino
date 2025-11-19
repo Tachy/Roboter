@@ -1,13 +1,12 @@
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
 #include <ArduinoJson.h>
+#include <U8g2lib.h>
 #include <Wire.h>
 
 // OLED configuration (AZ-Delivery 1.3" 128x64 I2C)
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define OLED_RESET -1
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+// U8g2 SH1106 driver (we only support SH1106 now)
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2_sh(U8G2_R0, /* reset=*/U8X8_PIN_NONE);
 
 // Simple 21x8 text buffer (6x8 font => 21 cols x 8 rows)
 static char oled_lines[8][22]; // 21 chars + NUL
@@ -20,7 +19,7 @@ static bool oled_present = false;
 // === KONSTANTEN ===
 #define PWM_MIN 60
 #define MAX_KOORDINATEN 50
-#define PWM_MAX 200
+#define PWM_MAX 255
 #define RAMP_UP_TIME_MS 1000
 #define RAMP_DOWN_TIME_MS 1000
 
@@ -72,23 +71,18 @@ Mode currentMode = MANUAL; // Startet im Wartezustand
 #define END_Z_O 29
 #define END_Z_U 30
 
-// Endschalter: true = NC (Normally Closed) wiring (pressed == HIGH),
-// false = NO (Normally Open) wiring (pressed == LOW)
-#define END_SWITCH_NC true
-
-// Helper: returns true when the end switch is currently pressed (according to wiring)
-static inline bool endPressed(uint8_t pin) {
-    if (END_SWITCH_NC)
-        return (digitalRead(pin) == HIGH);
-    else
-        return (digitalRead(pin) == LOW);
-}
-
 // Arduino-Pins Bürstenmotor
 #define PWM_BRUSH 46
 
+// Enable-Pin für alle Brücken
+#define EN_BRIDGE 47
+
 // Brush encoder (A/B)
 #define ENCODER_BRUSH_A 26 // Polling (kein Interrupt)
+
+// Endschalter: true = NC (Normally Closed) wiring (pressed == HIGH),
+// false = NO (Normally Open) wiring (pressed == LOW)
+#define END_SWITCH_NC true
 
 // Pins für Serial 0 sind fest: 0 (RX), 1 (TX)
 
@@ -123,9 +117,19 @@ int zielCount = 0;
 float aktuelleY_mm = 0;
 
 volatile long encoderBrush = 0;
+unsigned long lastBrushCheck = 0;
+long lastBrushTicks = 0;
 
 // --- 18 kHz PWM-Initialisierung für alle 16-Bit-Timer (1,3,4,5) inkl. Bürste ---
-const uint16_t MOTOR_PWM_TOP = 888; // ~18 kHz bei 16 MHz, N=1
+const uint16_t MOTOR_PWM_TOP = 110; // ~18 kHz bei 16 MHz, N=1
+
+// Helper: returns true when the end switch is currently pressed (according to wiring)
+static inline bool endPressed(uint8_t pin) {
+    if (END_SWITCH_NC)
+        return (digitalRead(pin) == HIGH);
+    else
+        return (digitalRead(pin) == LOW);
+}
 
 // Push a full line into the circular buffer (scrolling)
 void oledPushLine(const char *s) {
@@ -149,22 +153,17 @@ void oledPushLine(const char *s) {
         strncpy(oled_lines[7], tmp, 22);
     }
 
-    // redraw
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    // Use 8 pixel row spacing (6x8 font) and clear each row before drawing
+    // redraw using u8g2_sh only
     const uint8_t row_h = 8;
+    u8g2_sh.clearBuffer();
+    u8g2_sh.setFont(u8g2_font_ncenB08_tr);
     for (uint8_t i = 0; i < oled_line_count; i++) {
-        uint8_t y = i * row_h;
+        uint8_t y = (i + 1) * row_h; // baseline offset for u8g2
         if (y >= SCREEN_HEIGHT)
             break;
-        // clear the row area to avoid leftover pixels from previous longer lines
-        display.fillRect(0, y, SCREEN_WIDTH, row_h, SSD1306_BLACK);
-        display.setCursor(0, y);
-        display.print(oled_lines[i]);
+        u8g2_sh.drawStr(0, y, oled_lines[i]);
     }
-    display.display();
+    u8g2_sh.sendBuffer();
 }
 
 // Append text to current line (no newline)
@@ -183,8 +182,6 @@ void debug(const char *s) {
     }
     oled_cur[oled_cur_len] = '\0';
 }
-
-// Append and push as a new line (like println)
 void debugln(const char *s) {
     if (!oled_present) {
         if (s)
@@ -236,16 +233,51 @@ void debugCursorUp() {
     oled_line_count--;
 }
 
+// Motoren
+void motorAnalogWrite(uint8_t pin, uint8_t pwm) {
+    // PWM schreiben (0..255 auf 0..TOP abbilden)
+    uint16_t val = (uint32_t)pwm * MOTOR_PWM_TOP / 255u;
+    switch (pin) {
+    case RPWM_L:
+        OCR3A = val;
+        break; // Timer3, OC3A, Rad links
+    case LPWM_L:
+        OCR4A = val;
+        break; // Timer4, OC4A, Rad links
+    case LPWM_R:
+        OCR4B = val;
+        break; // Timer4, OC4B, Rad rechts
+    case RPWM_R:
+        OCR4C = val;
+        break; // Timer4, OC4C
+    case RPWM_Z:
+        OCR1A = val;
+        break; // Timer1, OC1A, Z-Achse
+    case LPWM_Z:
+        OCR1B = val;
+        break; // Timer1, OC1B, Z-Achse
+    case RPWM_X:
+        OCR5C = val;
+        break; // Timer5, OC5C, X-Achse
+    case LPWM_X:
+        OCR5B = val;
+        break; // Timer5, OC5B, X-Achse
+    case PWM_BRUSH:
+        OCR5A = val;
+        break; // Timer5, OC5A, Bürste
+    default:
+        return; // Unbekannter Pin
+    }
+}
 void initMotorPWM18kHz() {
     // Timer1: Pins 11 (OC1A), 12 (OC1B)
     TCCR1A = 0;
     TCCR1B = 0;
     TCNT1 = 0;
-    TCCR1A |= (1 << WGM11);
-    TCCR1B |= (1 << WGM12) | (1 << WGM13);
-    TCCR1A |= (1 << COM1A1) | (1 << COM1B1); // Nicht-invertierend A/B
     ICR1 = MOTOR_PWM_TOP;
-    TCCR1B |= (1 << CS10); // Prescaler 1
+    TCCR1A = (1 << WGM11) | (1 << COM1A1) | (1 << COM1A0) // OC1A invertiert
+             | (1 << COM1B1) | (1 << COM1B0);             // OC1B invertiert
+    TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS11);   // Prescaler 8
     OCR1A = 0;
     OCR1B = 0;
 
@@ -253,22 +285,20 @@ void initMotorPWM18kHz() {
     TCCR3A = 0;
     TCCR3B = 0;
     TCNT3 = 0;
-    TCCR3A |= (1 << WGM31);
-    TCCR3B |= (1 << WGM32) | (1 << WGM33);
-    TCCR3A |= (1 << COM3A1); // Nicht-invertierend A
     ICR3 = MOTOR_PWM_TOP;
-    TCCR3B |= (1 << CS30);
+    TCCR3A = (1 << WGM31) | (1 << COM3A1) | (1 << COM3A0); // OC3A invertiert (Pin 5)
+    TCCR3B = (1 << WGM33) | (1 << WGM32) | (1 << CS31);    // Prescaler 8
     OCR3A = 0;
 
     // Timer4: Pins 6 (OC4A), 7 (OC4B), 8 (OC4C)
     TCCR4A = 0;
     TCCR4B = 0;
     TCNT4 = 0;
-    TCCR4A |= (1 << WGM41);
-    TCCR4B |= (1 << WGM42) | (1 << WGM43);
-    TCCR4A |= (1 << COM4A1) | (1 << COM4B1) | (1 << COM4C1);
     ICR4 = MOTOR_PWM_TOP;
-    TCCR4B |= (1 << CS40);
+    TCCR4A = (1 << WGM41) | (1 << COM4A1) | (1 << COM4A0) // OC4A invertiert (Pin 6)
+             | (1 << COM4B1) | (1 << COM4B0)              // OC4B invertiert (Pin 7)
+             | (1 << COM4C1) | (1 << COM4C0);             // OC4C invertiert (Pin 8)
+    TCCR4B = (1 << WGM43) | (1 << WGM42) | (1 << CS41);   // Prescaler 8
     OCR4A = 0;
     OCR4B = 0;
     OCR4C = 0;
@@ -277,67 +307,45 @@ void initMotorPWM18kHz() {
     TCCR5A = 0;
     TCCR5B = 0;
     TCNT5 = 0;
-    TCCR5A |= (1 << WGM51);
-    TCCR5B |= (1 << WGM52) | (1 << WGM53);
-    TCCR5A |= (1 << COM5A1) | (1 << COM5B1) | (1 << COM5C1); // Nicht-invertierend A/B/C
     ICR5 = MOTOR_PWM_TOP;
-    TCCR5B |= (1 << CS50);
+    TCCR5A = (1 << WGM51) | (1 << COM5A1) | (1 << COM5A0) // OC5A invertiert (Pin 46)
+             | (1 << COM5B1) | (1 << COM5B0)              // OC5B invertiert (Pin 45)
+             | (1 << COM5C1) | (1 << COM5C0);             // OC5C invertiert (Pin 44)
+    TCCR5B = (1 << WGM53) | (1 << WGM52) | (1 << CS51);   // Prescaler 8
     OCR5A = 0;
     OCR5B = 0;
     OCR5C = 0;
 
+    pinMode(RPWM_L, OUTPUT);
+    pinMode(LPWM_L, OUTPUT);
+    pinMode(RPWM_R, OUTPUT);
+    pinMode(LPWM_R, OUTPUT);
+    pinMode(RPWM_X, OUTPUT);
+    pinMode(LPWM_X, OUTPUT);
+    pinMode(RPWM_Z, OUTPUT);
+    pinMode(LPWM_Z, OUTPUT);
+    pinMode(PWM_BRUSH, OUTPUT);
+
     // Ensure motors start in stopped state using the same inverted mapping
-    motorAnalogWrite(5, 255);
-    motorAnalogWrite(6, 255);
-    motorAnalogWrite(7, 255);
-    motorAnalogWrite(8, 255);
-    motorAnalogWrite(11, 255);
-    motorAnalogWrite(12, 255);
-    motorAnalogWrite(44, 255);
-    motorAnalogWrite(45, 255);
-    motorAnalogWrite(46, 255);
-}
+    motorAnalogWrite(RPWM_L, 0);
+    motorAnalogWrite(LPWM_L, 0);
+    motorAnalogWrite(RPWM_R, 0);
+    motorAnalogWrite(LPWM_R, 0);
+    motorAnalogWrite(RPWM_X, 0);
+    motorAnalogWrite(LPWM_X, 0);
+    motorAnalogWrite(RPWM_Z, 0);
+    motorAnalogWrite(LPWM_Z, 0);
+    motorAnalogWrite(PWM_BRUSH, 0);
 
-// PWM schreiben (0..255 auf 0..TOP abbilden)
-void motorAnalogWrite(uint8_t pin, uint8_t pwm) {
-    // Inverted mapping: 255 -> stop (0 duty), 0 -> full duty
-    uint32_t inv = 255u - (uint32_t)pwm;
-    uint16_t val = (uint32_t)inv * MOTOR_PWM_TOP / 255u;
-    switch (pin) {
-    case 5:
-        OCR3A = val;
-        break; // Timer3, OC3A
-    case 6:
-        OCR4A = val;
-        break; // Timer4, OC4A
-    case 7:
-        OCR4B = val;
-        break; // Timer4, OC4B
-    case 8:
-        OCR4C = val;
-        break; // Timer4, OC4C
-    case 11:
-        OCR1A = val;
-        break; // Timer1, OC1A
-    case 12:
-        OCR1B = val;
-        break; // Timer1, OC1B
-    case 44:
-        OCR5C = val;
-        break; // Timer5, OC5C
-    case 45:
-        OCR5B = val;
-        break; // Timer5, OC5B
-    case 46:
-        OCR5A = val;
-        break; // Timer5, OC5A (Bürste)
-    default:
-        // Fallback: apply inverted mapping for 8-bit analogWrite as well
-        analogWrite(pin, (uint8_t)inv);
-    }
-}
+    attachInterrupt(digitalPinToInterrupt(ENC_L_A), isrEncoderLinks, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENC_R_A), isrEncoderRechts, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENC_X_A), isrEncoderX, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENC_Z_A), isrEncoderZ, CHANGE);
 
-// === ENCODER ISR ===
+    // Enable all bridges (if needed, otherwise remove this line)
+    pinMode(EN_BRIDGE, OUTPUT);
+    digitalWrite(EN_BRIDGE, HIGH);
+}
 
 // --- Polling-Funktion für ENCODER_BRUSH_A (Pin 31) ---
 void pollBrushEncoder() {
@@ -356,9 +364,9 @@ void isrEncoderLinks() {
 }
 void isrEncoderRechts() {
     if (digitalRead(ENC_R_A) == digitalRead(ENC_R_B))
-        encoderRechts++;
-    else
         encoderRechts--;
+    else
+        encoderRechts++;
 }
 void isrEncoderX() {
     if (digitalRead(ENC_X_A) == digitalRead(ENC_X_B))
@@ -372,67 +380,8 @@ void isrEncoderZ() {
     else
         encoderZ--;
 }
-void isrEncoderBrush() { encoderBrush++; }
-
-void setup() {
-
-    // Serial (USB) debug disabled for this module - use OLED display instead
-    Serial.begin(115200); // Verbindung zum Raspberry Pi
-
-    // Init OLED
-    // Try common I2C addresses for 128x64 displays (0x3C, 0x3D).
-    if (display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-        oled_present = true;
-        Serial.println("OLED init @0x3C OK");
-    } else if (display.begin(SSD1306_SWITCHCAPVCC, 0x3D)) {
-        oled_present = true;
-        Serial.println("OLED init @0x3D OK");
-    } else {
-        oled_present = false;
-        Serial.println("OLED init failed (no 0x3C/0x3D)");
-    }
-
-    if (oled_present) {
-        display.clearDisplay();
-        display.setTextSize(1);
-        display.setTextColor(SSD1306_WHITE);
-        display.display();
-    }
-    oled_line_count = 0;
-    oled_cur_len = 0;
-    debugln("Programm gestartet");
-
-    pinMode(RPWM_L, OUTPUT);
-    pinMode(LPWM_L, OUTPUT);
-    pinMode(RPWM_R, OUTPUT);
-    pinMode(LPWM_R, OUTPUT);
-    pinMode(RPWM_X, OUTPUT);
-    pinMode(LPWM_X, OUTPUT);
-    pinMode(RPWM_Z, OUTPUT);
-    pinMode(LPWM_Z, OUTPUT);
-    pinMode(PWM_BRUSH, OUTPUT);
-    initMotorPWM18kHz();
-
-    pinMode(ENC_L_A, INPUT);
-    pinMode(ENC_L_B, INPUT);
-    pinMode(ENC_R_A, INPUT);
-    pinMode(ENC_R_B, INPUT);
-    pinMode(ENC_X_A, INPUT);
-    pinMode(ENC_X_B, INPUT);
-    pinMode(ENC_Z_A, INPUT);
-    pinMode(ENC_Z_B, INPUT);
-    pinMode(END_X_L, INPUT_PULLUP);
-    pinMode(END_Z_O, INPUT_PULLUP);
-    pinMode(END_X_R, INPUT_PULLUP);
-    pinMode(END_Z_U, INPUT_PULLUP);
-
-    attachInterrupt(digitalPinToInterrupt(ENC_L_A), isrEncoderLinks, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENC_R_A), isrEncoderRechts, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENC_X_A), isrEncoderX, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENC_Z_A), isrEncoderZ, CHANGE);
-
-    kalibriereX();
-    kalibriereZ();
+void isrEncoderBrush() {
+    encoderBrush++;
 }
 
 void kalibriereX() {
@@ -445,10 +394,10 @@ void kalibriereX() {
     }
     motorAnalogWrite(RPWM_X, 0);
     motorAnalogWrite(LPWM_X, 0);
+    delay(10);
     encoderX = 0;
     debugln("OK.");
 }
-
 void kalibriereZ() {
     debug("Kalibriere Z...");
     // run until the top end switch is pressed
@@ -459,6 +408,7 @@ void kalibriereZ() {
     }
     motorAnalogWrite(RPWM_Z, 0);
     motorAnalogWrite(LPWM_Z, 0);
+    delay(10);
     encoderZ = 0;
     debugln("OK.");
 }
@@ -506,11 +456,10 @@ void setzeXPosition(float zielPos_mm) {
         debugln(tmp);
     }
 }
-
-// Z-Achse absolut auf Zielposition in mm verfahren (analog zu setzeXPosition)
-// vorwaerts=true bedeutet Absenken (nach unten), false Anheben (nach oben)
-// Beim Anheben wird der obere Endschalter END_Z_O respektiert
 void setzeZPosition(float zielPos_mm) {
+    // Z-Achse absolut auf Zielposition in mm verfahren (analog zu setzeXPosition)
+    // vorwaerts=true bedeutet Absenken (nach unten), false Anheben (nach oben)
+    // Beim Anheben wird der obere Endschalter END_Z_O respektiert
     long zielImpulse = zielPos_mm * IMPULSE_Z_PRO_MM;
     long deltaImpulse = zielImpulse - encoderZ;
     bool vorwaerts = (deltaImpulse > 0);
@@ -562,8 +511,6 @@ void setzeZPosition(float zielPos_mm) {
     }
 }
 
-unsigned long lastBrushCheck = 0;
-long lastBrushTicks = 0;
 float getBrushRPM() {
     unsigned long now = millis();
     unsigned long dt = now - lastBrushCheck;
@@ -704,7 +651,7 @@ void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
     motorAnalogWrite(LPWM_L, 0);
     motorAnalogWrite(RPWM_R, 0);
     motorAnalogWrite(LPWM_R, 0);
-    debugln("ZIel erreicht.");
+    debugln("Ziel erreicht.");
 }
 
 void anfrageUndAbarbeiten() {
@@ -803,6 +750,7 @@ void processSerialCommand() {
 
     // Verarbeite nur vollständige Zeilen
     if (lineComplete) {
+
         // Befehl auswerten basierend auf Keywords (indexOf >= 0 bedeutet "gefunden")
         if (cmdBuffer.indexOf("START") >= 0) {
             if (currentMode == WAITING_FOR_START) {
@@ -859,63 +807,111 @@ void processSerialCommand() {
     }
 }
 
+// clamp-Hilfsfunktion
+static int16_t clamp_int16(int16_t val, int16_t minVal, int16_t maxVal) {
+    if (val < minVal)
+        return minVal;
+    if (val > maxVal)
+        return maxVal;
+    return val;
+}
+
+void joystickToPwm(int16_t x, int16_t y, int16_t *pwmL, int16_t *pwmR) {
+    // Rohwerte im "Joystickraum"
+    // v = -y  (vorwärts = positiv)
+    // r = -x  (rechtsdrehung = positiv rechts, negativ links)
+    // raw_L = v - r = x - y
+    // raw_R = v + r = -(x + y)
+
+    int16_t rawL = x - y;
+    int16_t rawR = -(x + y);
+
+    // Auf Bereich -100 .. 100 begrenzen (Clamping)
+    rawL = clamp_int16(rawL, -100, 100);
+    rawR = clamp_int16(rawR, -100, 100);
+
+    // Auf PWM-Bereich -255 .. 255 skalieren
+    // int32_t als Zwischentyp, um Überläufe zu vermeiden
+    int32_t tmpL = (int32_t)rawL * 255 / 100;
+    int32_t tmpR = (int32_t)rawR * 255 / 100;
+
+    // Ergebnis zurückgeben
+    *pwmL = (int16_t)tmpL;
+    *pwmR = (int16_t)tmpR;
+}
+
 void processJoystickCommand(int x, int y) {
-    // Debug-Ausgabe
-    /*
-        {
-            char tmp[64];
-            snprintf(tmp, sizeof(tmp), "Joy: X=%d Y=%d", x, y);
-            debugln(tmp);
+
+    int16_t pwmLeft = 0;
+    int16_t pwmRight = 0;
+    joystickToPwm(x, y, &pwmLeft, &pwmRight);
+
+    // Blocking linear ramp-up / ramp-down over 400 ms from last applied PWM to target PWM
+    static int lastPwmLeft = 0;
+    static int lastPwmRight = 0;
+    const unsigned long ramp_ms = 400;
+    const unsigned int step_ms = 20; // 20 ms per step -> 20 steps
+    const int steps = ramp_ms / step_ms;
+
+    if (lastPwmLeft == pwmLeft && lastPwmRight == pwmRight) {
+        // no change -> just write
+        if (pwmLeft > 0) {
+            motorAnalogWrite(RPWM_L, pwmLeft);
+            motorAnalogWrite(LPWM_L, 0);
+        } else {
+            motorAnalogWrite(RPWM_L, 0);
+            motorAnalogWrite(LPWM_L, -pwmLeft);
         }
-    */
-    // Normalisiere x und y auf -1.0 bis 1.0
-    float xNorm = x / 100.0;
-    float yNorm = y / 100.0;
 
-    // Berechne Basis-Geschwindigkeiten für beide Räder
-    float leftSpeed = -yNorm;  // Negativ weil -Y = vorwärts
-    float rightSpeed = -yNorm; // Negativ weil -Y = vorwärts
-
-    // Füge Drehkomponente hinzu
-    // Bei positivem X (rechts) muss links schneller als rechts
-    // Bei negativem X (links) muss rechts schneller als links
-    if (xNorm > 0) {
-        // Rechtsdrehung
-        rightSpeed *= (1.0 - xNorm); // Rechtes Rad wird langsamer
-        leftSpeed *= 1.0;            // Linkes Rad behält Geschwindigkeit
+        if (pwmRight > 0) {
+            motorAnalogWrite(RPWM_R, pwmRight);
+            motorAnalogWrite(LPWM_R, 0);
+        } else {
+            motorAnalogWrite(RPWM_R, 0);
+            motorAnalogWrite(LPWM_R, -pwmRight);
+        }
     } else {
-        // Linksdrehung
-        leftSpeed *= (1.0 + xNorm); // Linkes Rad wird langsamer (xNorm ist negativ)
-        rightSpeed *= 1.0;          // Rechtes Rad behält Geschwindigkeit
-    }
+        for (int s = 1; s <= steps; s++) {
+            int interpL = lastPwmLeft + ((pwmLeft - lastPwmLeft) * s) / steps;
+            int interpR = lastPwmRight + ((pwmRight - lastPwmRight) * s) / steps;
 
-    // Reine Drehung (wenn y = 0)
-    if (abs(yNorm) < 0.1 && abs(xNorm) > 0.1) {
-        leftSpeed = xNorm;   // Positives X = links vorwärts
-        rightSpeed = -xNorm; // Positives X = rechts rückwärts
-    }
+            if (interpL > 0) {
+                motorAnalogWrite(RPWM_L, interpL);
+                motorAnalogWrite(LPWM_L, 0);
+            } else {
+                motorAnalogWrite(RPWM_L, 0);
+                motorAnalogWrite(LPWM_L, -interpL);
+            }
 
-    // Wandle in PWM-Werte um (-200 bis 200)
-    int pwmLeft = constrain((int)(leftSpeed * PWM_MAX), -PWM_MAX, PWM_MAX);
-    int pwmRight = constrain((int)(rightSpeed * PWM_MAX), -PWM_MAX, PWM_MAX);
+            if (interpR > 0) {
+                motorAnalogWrite(RPWM_R, interpR);
+                motorAnalogWrite(LPWM_R, 0);
+            } else {
+                motorAnalogWrite(RPWM_R, 0);
+                motorAnalogWrite(LPWM_R, -interpR);
+            }
 
-    // Setze Motoren
-    // Links
-    if (pwmLeft > 0) {
-        motorAnalogWrite(RPWM_L, pwmLeft);
-        motorAnalogWrite(LPWM_L, 0);
-    } else {
-        motorAnalogWrite(RPWM_L, 0);
-        motorAnalogWrite(LPWM_L, -pwmLeft);
-    }
+            delay(step_ms);
+        }
+        // ensure exact final values
+        if (pwmLeft > 0) {
+            motorAnalogWrite(RPWM_L, pwmLeft);
+            motorAnalogWrite(LPWM_L, 0);
+        } else {
+            motorAnalogWrite(RPWM_L, 0);
+            motorAnalogWrite(LPWM_L, -pwmLeft);
+        }
 
-    // Rechts
-    if (pwmRight > 0) {
-        motorAnalogWrite(RPWM_R, 0);
-        motorAnalogWrite(LPWM_R, pwmRight);
-    } else {
-        motorAnalogWrite(RPWM_R, -pwmRight);
-        motorAnalogWrite(LPWM_R, 0);
+        if (pwmRight > 0) {
+            motorAnalogWrite(RPWM_R, pwmRight);
+            motorAnalogWrite(LPWM_R, 0);
+        } else {
+            motorAnalogWrite(RPWM_R, 0);
+            motorAnalogWrite(LPWM_R, -pwmRight);
+        }
+
+        lastPwmLeft = pwmLeft;
+        lastPwmRight = pwmRight;
     }
 
     // Debug-Ausgabe der Motorwerte
@@ -1024,6 +1020,58 @@ void sendeStatusJson() {
     size_t n = serializeJson(doc, buffer);
     buffer[n] = '\0';
     Serial.println(buffer);
+}
+
+// === SETUP und LOOP ===
+
+void setup() {
+
+    // Serial (USB) debug disabled for this module - use OLED display instead
+    Serial.begin(115200); // Verbindung zum Raspberry Pi
+
+    // Init OLED (Adafruit SSD1306). Probe I2C addresses to decide whether to use OLED.
+    Wire.begin();
+
+    bool found3C = (Wire.beginTransmission(0x3C), Wire.endTransmission() == 0);
+    bool found3D = (Wire.beginTransmission(0x3D), Wire.endTransmission() == 0);
+    if (found3C || found3D) {
+        oled_present = true;
+        Serial.println(found3C ? "OLED found @0x3C" : "OLED found @0x3D");
+        // Set I2C clock lower for compatibility
+        Wire.setClock(100000);
+        // Initialize SH1106 display (U8g2)
+        u8g2_sh.begin();
+        u8g2_sh.clearBuffer();
+        u8g2_sh.setFont(u8g2_font_ncenB08_tr);
+        u8g2_sh.drawStr(0, 12, "OLED bereit (SH1106)");
+        u8g2_sh.sendBuffer();
+    } else {
+        oled_present = false;
+        Serial.println("OLED init failed (no 0x3C/0x3D)");
+    }
+
+    // oled already initialized above (if present)
+    oled_line_count = 0;
+    oled_cur_len = 0;
+    debugln("Programm gestartet");
+
+    initMotorPWM18kHz(); // Alle Motor-PWM Kanäle initialisieren
+
+    pinMode(ENC_L_A, INPUT);
+    pinMode(ENC_L_B, INPUT);
+    pinMode(ENC_R_A, INPUT);
+    pinMode(ENC_R_B, INPUT);
+    pinMode(ENC_X_A, INPUT);
+    pinMode(ENC_X_B, INPUT);
+    pinMode(ENC_Z_A, INPUT);
+    pinMode(ENC_Z_B, INPUT);
+    pinMode(END_X_L, INPUT_PULLUP);
+    pinMode(END_Z_O, INPUT_PULLUP);
+    pinMode(END_X_R, INPUT_PULLUP);
+    pinMode(END_Z_U, INPUT_PULLUP);
+
+    kalibriereZ();
+    kalibriereX();
 }
 
 void loop() {
