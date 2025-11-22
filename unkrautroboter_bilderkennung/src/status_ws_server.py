@@ -5,7 +5,11 @@ import json
 import websockets
 import logging
 from . import config
-from websockets.exceptions import ConnectionClosedOK
+from websockets.exceptions import (
+    ConnectionClosedOK,
+    ConnectionClosedError,
+    ConnectionClosed,
+)
 from . import robot_control, camera, geometry, status_bus
 
 # Logger einrichten
@@ -159,13 +163,28 @@ async def status_broadcast(websocket):
                 )
                 if curr_ts != last_ts and curr_ts is not None:
                     status = get_status_data()
-                    await websocket.send(json.dumps(status))
+                    try:
+                        await websocket.send(json.dumps(status))
+                    except (
+                        ConnectionClosedOK,
+                        ConnectionClosedError,
+                        ConnectionClosed,
+                    ):
+                        # Client disconnected (clean or unclean). Stop broadcasting.
+                        return
                     last_ts = curr_ts
                     sent_on_change = True
                     break
                 if curr_msg_ts and curr_msg_ts != last_msg_ts:
                     status = get_status_data()
-                    await websocket.send(json.dumps(status))
+                    try:
+                        await websocket.send(json.dumps(status))
+                    except (
+                        ConnectionClosedOK,
+                        ConnectionClosedError,
+                        ConnectionClosed,
+                    ):
+                        return
                     last_msg_ts = curr_msg_ts
                     sent_on_change = True
                     break
@@ -177,10 +196,21 @@ async def status_broadcast(websocket):
             # Periodischer Heartbeat-Status
             status = get_status_data()
             logger.debug(f"[WebSocket-Status] Sende (Heartbeat): {status}")
-            await websocket.send(json.dumps(status))
+            try:
+                await websocket.send(json.dumps(status))
+            except (ConnectionClosedOK, ConnectionClosedError, ConnectionClosed):
+                # Client disconnected while trying to send heartbeat
+                return
     except ConnectionClosedOK:
         # Verbindung wurde sauber vom Client geschlossen – kein Fehler, kein Log nötig
         pass
+    except ConnectionClosedError:
+        # Keine Close-Frame erhalten oder andere Verbindungsfehler
+        # Kein Stacktrace notwendig; Client hat sich vermutlich plötzlich getrennt
+        return
+    except ConnectionClosed:
+        # Allgemeine Closed-Ausnahme als Sicherheitsnetz
+        return
 
 
 def start_status_ws_server():

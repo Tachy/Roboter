@@ -185,7 +185,16 @@ class RobotControl:
     def process_auto_mode(self):
         """Verarbeitet die automatische Steuerung."""
         line = self.serial.read_line()
-        if line == "GETXY":
+        if line == "WAITING":
+            logger.info("<- Arduino: WAITING")
+            if self.get_mode() != "AUTO":
+                self.send_command("MODE:MANUAL")
+                logger.info("-> Arduino: MANUAL")
+            else:
+                self.send_command("MODE:AUTO")
+                logger.info("-> Arduino: AUTO")
+
+        elif line == "GETXY":
             logger.info("<- Arduino: GETXY")
 
             # Entzerrtes Einzelbild aufnehmen und verarbeiten (immer undistortiert für GETXY)
@@ -486,8 +495,7 @@ class RobotControl:
                 except Exception as e:
                     logger.error(f"Fehler beim Scan des Upload-Verzeichnisses: {e}")
 
-                if self.get_mode() == "AUTO":
-                    self.process_auto_mode()
+                self.process_auto_mode()
                 time.sleep(0.1)
 
         except KeyboardInterrupt:
@@ -527,20 +535,6 @@ class RobotControl:
                         GPIO.setmode(GPIO.BCM)
                         # Für Optokoppler: idle LOW, Puls HIGH
                         GPIO.setup(gpio_pin, GPIO.OUT, initial=GPIO.LOW)
-                        # Kurzer Countdown, damit du manuell resetten kannst
-                        countdown = 10
-                        logger.info(
-                            f"Automatischer GPIO-Reset in {countdown}s (Pin BCM {gpio_pin})."
-                            " Falls du manuell resetten willst: jetzt tun."
-                        )
-                        try:
-                            for sec in range(countdown, 0, -1):
-                                logger.info(f"Reset in {sec}s...")
-                                time.sleep(1)
-                        except KeyboardInterrupt:
-                            logger.info(
-                                "Countdown für automatischen Reset abgebrochen durch KeyboardInterrupt."
-                            )
                         # Setze kurz HIGH, dann wieder LOW
                         GPIO.output(gpio_pin, GPIO.HIGH)
                         time.sleep(float(fw_pulse))
