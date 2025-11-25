@@ -3,7 +3,7 @@ Description=Shutdown button handler (GPIO23)
 After=multi-user.target
 
 [Service]
-ExecStart=/usr/bin/python3 /usr/local/bin/gpio23-shutdown.py
+ExecStart=/usr/bin/python3 /usr/local/bin/gpio24-shutdown.py
 Restart=always
 User=root
 

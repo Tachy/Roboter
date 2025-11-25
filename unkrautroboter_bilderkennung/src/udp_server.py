@@ -106,11 +106,12 @@ def start_joystick_server():
             continue
         command = data.decode().strip()
         if on_command:
-            handled = on_command(command)
-            if handled:
-                logger.debug(
-                    f"Joystick-Befehl empfangen und verarbeitet: {command} (von {addr})"
-                )
+            try:
+                handled = on_command(command)
+                if handled:
+                    logger.debug(
+                        f"Joystick-Befehl empfangen und verarbeitet: {command} (von {addr})"
+                    )
                 # BUTTON (B=1): je nach Modus
                 if ",B=1" in command:
                     mode = (
@@ -124,6 +125,10 @@ def start_joystick_server():
                         robot_control.robot.calibration_button_pressed()
                     elif mode == "EXTRINSIK":
                         robot_control.robot.extrinsic_button_pressed()
+            except Exception as e:
+                logger.error(
+                    f"Fehler beim Verarbeiten des Joystick-Befehls '{command}': {e}"
+                )
             else:
                 logger.debug(f"Joystick-Befehl ignoriert (von {addr})")
 

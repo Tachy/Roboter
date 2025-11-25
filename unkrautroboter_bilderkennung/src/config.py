@@ -51,7 +51,7 @@ UPLOAD_DIR = "./upload/"
 
 # GPIO-Pin (BCM) an der Raspberry Pi, der mit dem RESET-Pin des Mega verbunden ist.
 # Wenn None, wird kein Reset per GPIO durchgeführt. Hinweis: RESET ist aktiv LOW.
-FW_RESET_GPIO = 23  # z.B. 24
+FW_RESET_GPIO = 23  # z.B. 23
 # Firmware reset tuning (seconds)
 # Duration die RESET-Leitung kurz aktivieren (Sekunden)
 FW_RESET_PULSE_SEC = 0.1

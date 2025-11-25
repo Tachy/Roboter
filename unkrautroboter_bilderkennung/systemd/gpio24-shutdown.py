@@ -3,8 +3,8 @@ from gpiozero import Button  # type: ignore
 from signal import pause
 import os
 
-# GPIO3 (Pin 5) wird als Shutdown-Taster verwendet
-shutdown_btn = Button(23, pull_up=True, hold_time=1)  # 1 Sekunde halten für Shutdown
+# GPIO24 (Pin 18) wird als Shutdown-Taster verwendet
+shutdown_btn = Button(24, pull_up=True, hold_time=1)  # 1 Sekunde halten für Shutdown
 
 
 def shutdown():

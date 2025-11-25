@@ -2,6 +2,12 @@
 #include <U8g2lib.h>
 #include <Wire.h>
 
+// INA260 I2C address (default)
+#define INA260_ADDR 0x40
+
+// Flag whether INA260 is present on the I2C bus
+static bool ina260_present = false;
+
 // OLED configuration (AZ-Delivery 1.3" 128x64 I2C)
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -89,7 +95,7 @@ Mode currentMode = WAITING_FOR_START; // Startet im Wartezustand
 // Pins für Serial 0 sind fest: 0 (RX), 1 (TX)
 
 // Bürstenmotor
-#define BRUSH_CPR 211.2
+#define BRUSH_CPR 106
 #define BRUSH_TARGET_RPM 2200
 
 #define ENCODER_X_CPR 600
@@ -103,7 +109,9 @@ Mode currentMode = WAITING_FOR_START; // Startet im Wartezustand
 #define RAMP_RAD_IMPULSE 10000
 #define MIN_RAMP_IMP 0
 
-#define MITTEX 300
+#define MAX_X 440
+#define MAX_Z 58
+#define MITTEX 220
 
 volatile long encoderLinks = 0;
 volatile long encoderRechts = 0;
@@ -125,8 +133,6 @@ int zielCount = 0;
 float aktuelleY_mm = 0;
 
 volatile long encoderBrush = 0;
-unsigned long lastBrushCheck = 0;
-long lastBrushTicks = 0;
 
 // --- 18 kHz PWM-Initialisierung für alle 16-Bit-Timer (1,3,4,5) inkl. Bürste ---
 const uint16_t MOTOR_PWM_TOP = 110; // ~18 kHz bei 16 MHz, N=1
@@ -358,15 +364,7 @@ void initMotorPWM18kHz() {
     digitalWrite(EN_BRIDGE, HIGH);
 }
 
-// --- Polling-Funktion für ENCODER_BRUSH_A (Pin 31) ---
-void pollBrushEncoder() {
-    static int lastBrushState = HIGH;
-    int brushState = digitalRead(ENCODER_BRUSH_A);
-    if (brushState == LOW && lastBrushState == HIGH) {
-        encoderBrush++;
-    }
-    lastBrushState = brushState;
-}
+// Note: brush encoder is sampled when needed inside getBrushRPM().
 void isrEncoderLinks() {
     if (digitalRead(ENC_L_A) == digitalRead(ENC_L_B))
         encoderLinks++;
@@ -399,7 +397,7 @@ void kalibriereX() {
     debug("Kalibriere X...");
     // run until the left end switch is pressed
     while (!endPressed(END_X_L)) {
-        motorAnalogWrite(RPWM_X, 100);
+        motorAnalogWrite(RPWM_X, 150);
         motorAnalogWrite(LPWM_X, 0);
         delay(5);
     }
@@ -413,7 +411,7 @@ void kalibriereZ() {
     debug("Kalibriere Z...");
     // run until the top end switch is pressed
     while (!endPressed(END_Z_O)) {
-        motorAnalogWrite(RPWM_Z, 100);
+        motorAnalogWrite(RPWM_Z, 150);
         motorAnalogWrite(LPWM_Z, 0);
         delay(5);
     }
@@ -493,10 +491,6 @@ void setzeXPosition(float zielPos_mm) {
             motorAnalogWrite(RPWM_X, pwm);
             motorAnalogWrite(LPWM_X, 0);
         }
-
-        char tmp[64];
-        snprintf(tmp, sizeof(tmp), "X: %ld/%ld/%d", encoderX, zielAbsolut, pwm);
-        debugln(tmp);
         delay(10);
     }
 
@@ -583,10 +577,6 @@ void setzeZPosition(float zielPos_mm) {
             motorAnalogWrite(RPWM_Z, pwm);
             motorAnalogWrite(LPWM_Z, 0);
         }
-
-        char tmp[64];
-        snprintf(tmp, sizeof(tmp), "Z: %ld/%ld/%d", encoderZ, zielAbsolut, pwm);
-        debugln(tmp);
         delay(10);
     }
 
@@ -608,19 +598,26 @@ void setzeZPosition(float zielPos_mm) {
 }
 
 float getBrushRPM() {
-    unsigned long now = millis();
-    unsigned long dt = now - lastBrushCheck;
-    if (dt < 200)
-        return -1;
-    long dTicks = encoderBrush - lastBrushTicks;
-    lastBrushTicks = encoderBrush;
-    lastBrushCheck = now;
-    return (dTicks * 60000.0) / (BRUSH_CPR * dt);
+    // Sample the brush encoder for 1 second and compute RPM.
+    unsigned long start = millis();
+    int lastState = digitalRead(ENCODER_BRUSH_A);
+    long pulses = 0;
+
+    // Poll for 1000 ms. We use a small delay to avoid hammering CPU.
+    while (millis() - start < 1000) {
+        int s = digitalRead(ENCODER_BRUSH_A);
+        if (s == LOW && lastState == HIGH) {
+            pulses++;
+        }
+        lastState = s;
+    }
+
+    // pulses counted in 1 second -> revolutions per minute = (pulses / CPR) * 60
+    float rpm = (pulses * 60.0) / BRUSH_CPR;
+    return rpm;
 }
 
 void aktiviereBuerste() {
-    const float MIN_RPM = BRUSH_TARGET_RPM * 0.5;
-    const float RECOVERY_RPM = BRUSH_TARGET_RPM * 0.9;
 
     bool erfolgreich = false;
 
@@ -628,57 +625,48 @@ void aktiviereBuerste() {
     const float zielPos_mm = 50.0f; // Ziel: 50 mm
     const float step_mm = 5.0f;     // Schrittweite in mm pro setzeZPosition-Aufruf
 
-    int versuch = 0;
+    encoderBrush = 0;
 
-    while (versuch < 3 && !erfolgreich) {
-        versuch++;
-        encoderBrush = 0;
-        lastBrushCheck = millis();
-        lastBrushTicks = 0;
+    setzeZPosition(start_mm);
 
-        setzeZPosition(start_mm);
+    // Bürste starten (Ramp-up)
+    for (int pwm = 0; pwm <= 100; pwm += 5) {
+        motorAnalogWrite(PWM_BRUSH, pwm);
+        delay(10);
+    }
 
-        // Bürste starten (Ramp-up)
-        for (int pwm = 0; pwm <= 255; pwm += 5) {
-            motorAnalogWrite(PWM_BRUSH, pwm);
-            delay(10);
+    float target_rpm = getBrushRPM();
+    const float MIN_RPM = target_rpm * 0.9;
+
+    // Aktuelle und Ziel-Position in mm
+    float next_mm = start_mm;
+
+    while (next_mm < zielPos_mm) {
+
+        next_mm += step_mm;
+
+        // Bewege absolut auf next_mm (setzeZPosition behandelt Endschalter)
+        setzeZPosition(next_mm);
+
+        // Prüfe Drehzahl (getBrushRPM pollt intern 1s)
+        float rpm = getBrushRPM();
+        if (rpm > 0 && rpm < MIN_RPM) {
+            char tmp[64];
+            snprintf(tmp, sizeof(tmp), "RPM: %d < %d.", (int)rpm, (int)MIN_RPM);
+            debugln(tmp);
+            // 10 mm zurück (relativ zur aktuellen Position)
+            break; // Am Boden angekommen
         }
-
-        // Schlitten absenken — mit setzeZPosition in kleinen Schritten, damit
-        // wir bei RPM-Abfall zwischendurch abbrechen und zurückfahren können.
-        bool drehzahlAbfall = false;
-
-        // Aktuelle und Ziel-Position in mm
-
-        float next_mm = start_mm;
-
-        while (next_mm < zielPos_mm) {
-
-            next_mm += step_mm;
-
-            // Bewege absolut auf next_mm (setzeZPosition behandelt Endschalter)
-            setzeZPosition(next_mm);
-
-            // Update Puffer und prüfe Drehzahl
-            pollBrushEncoder();
-            float rpm = getBrushRPM();
-            if (rpm > 0 && rpm < MIN_RPM) {
-                char tmp[64];
-                snprintf(tmp, sizeof(tmp), "RPM < %.0f.", MIN_RPM);
-                debugln(tmp);
-
-                // 10 mm zurück (relativ zur aktuellen Position)
-                next_mm -= step_mm * 2; // korrigiere aktuellen Stand
-                break;                  // neuer Versuch
-            }
-
-            // Aktualisiere aktuelle Position für die Schleifenbedingung
-        }
+        char tmp[64];
+        snprintf(tmp, sizeof(tmp), "RPM: %d > %d.", (int)rpm, (int)MIN_RPM);
+        debugln(tmp);
     }
 
     // Bürste stoppen
+    next_mm -= step_mm; // korrigiere aktuellen Stand
+    setzeZPosition(next_mm);
 
-    for (int pwm = 255; pwm >= 0; pwm -= 5) {
+    for (int pwm = 100; pwm >= 0; pwm -= 5) {
         motorAnalogWrite(PWM_BRUSH, pwm);
         delay(10);
     }
@@ -699,11 +687,26 @@ void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
     const long MAX_RAMP_IMP = RAMP_RAD_IMPULSE; // reuse X ramp constant
     const float kSync = 2;                      // synchronization gain (unchanged)
 
-    while ((encoderLinks < zielImpulse) && (encoderRechts < zielImpulse)) {
-        long currAvg = (encoderLinks + encoderRechts) / 2;
+    // Bei Rückwärtsfahrt (false,false) werden Encoder negativ -> Ziel ist negativ
+    // Schleife prüft Absolutwerte
+    bool rueckwaerts = (!vorLinks && !vorRechts);
+    long absZielImpulse = (zielImpulse >= 0) ? zielImpulse : -zielImpulse;
 
-        long distFromStart = currAvg >= startAvg ? (currAvg - startAvg) : (startAvg - currAvg);
-        long distToGoal = zielImpulse >= currAvg ? (zielImpulse - currAvg) : (currAvg - zielImpulse);
+    while (true) {
+        long absEncoderL = (encoderLinks >= 0) ? encoderLinks : -encoderLinks;
+        long absEncoderR = (encoderRechts >= 0) ? encoderRechts : -encoderRechts;
+
+        // Abbruch wenn beide Räder Ziel erreicht haben (Absolutwert)
+        if (absEncoderL >= absZielImpulse && absEncoderR >= absZielImpulse)
+            break;
+
+        long currAvg = (encoderLinks + encoderRechts) / 2;
+        long absCurrAvg = (currAvg >= 0) ? currAvg : -currAvg;
+
+        long distFromStart = absCurrAvg;
+        long distToGoal = absZielImpulse - absCurrAvg;
+        if (distToGoal < 0)
+            distToGoal = 0;
 
         // Linear accel from start and decel to goal (same mapping as setzeXPosition)
         int pwmAccel;
@@ -731,18 +734,19 @@ void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
         int pwm = (pwmAccel < pwmDecel) ? pwmAccel : pwmDecel;
 
         // Per-loop wheel synchronization: only reduce the faster wheel.
-        // If left is ahead (delta>0) reduce left; if right is ahead (delta<0) reduce right.
-        long delta = encoderLinks - encoderRechts;
+        // For backward motion, more negative encoder value = farther traveled.
+        // We use absolute values to determine which wheel is ahead.
+        long absDelta = absEncoderL - absEncoderR;
         int pwmL = pwm;
         int pwmR = pwm;
 
-        if (delta > 0) {
-            // left wheel ahead -> reduce left only
-            int adjust = (int)(delta * kSync);
+        if (absDelta > 0) {
+            // left wheel ahead (has traveled farther) -> reduce left only
+            int adjust = (int)(absDelta * kSync);
             pwmL = pwm - adjust;
-        } else if (delta < 0) {
-            // right wheel ahead -> reduce right only
-            int adjust = (int)((-delta) * kSync);
+        } else if (absDelta < 0) {
+            // right wheel ahead (has traveled farther) -> reduce right only
+            int adjust = (int)((-absDelta) * kSync);
             pwmR = pwm - adjust;
         }
 
@@ -750,6 +754,7 @@ void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
         pwmL = constrain(pwmL, PWM_MIN, PWM_MAX);
         pwmR = constrain(pwmR, PWM_MIN, PWM_MAX);
 
+        // vorLinks/vorRechts: true = vorwärts (RPWM), false = rückwärts (LPWM)
         motorAnalogWrite(RPWM_L, vorLinks ? pwmL : 0);
         motorAnalogWrite(LPWM_L, vorLinks ? 0 : pwmL);
         motorAnalogWrite(RPWM_R, vorRechts ? pwmR : 0);
@@ -764,9 +769,11 @@ void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
     delay(500);
 
     deltaEncoderRad = (encoderLinks + encoderRechts) / 2 - zielImpulse; // zu weit gefahren
-    char tmp[64];
-    snprintf(tmp, sizeof(tmp), "R: %ld/%ld/%ld", encoderLinks, encoderRechts, zielImpulse);
-    debugln(tmp);
+    {
+        char tmp[64];
+        snprintf(tmp, sizeof(tmp), "R: %ld/%ld/%ld", encoderLinks, encoderRechts, zielImpulse);
+        debugln(tmp);
+    }
 }
 
 void anfrageUndAbarbeiten() {
@@ -811,6 +818,28 @@ void anfrageUndAbarbeiten() {
         debugln(tmp);
     }
 
+    // Sortiere empfangene Koordinaten nach Y aufsteigend, damit wir sie
+    // in aufsteigender Y-Reihenfolge abarbeiten.
+    if (zielCount > 1) {
+        for (int i = 0; i < zielCount - 1; i++) {
+            int best = i;
+            for (int j = i + 1; j < zielCount; j++) {
+                if (ziele[j].y_mm < ziele[best].y_mm) {
+                    best = j;
+                }
+            }
+            if (best != i) {
+                Zielpunkt tmp = ziele[i];
+                ziele[i] = ziele[best];
+                ziele[best] = tmp;
+            }
+        }
+        // Optional: kurze Debug-Ausgabe der ersten/letzten nach Sort
+        char dbg[128];
+        snprintf(dbg, sizeof(dbg), "Y[0]=%.2f Y[%d]=%.2f", ziele[0].y_mm, zielCount - 1, ziele[zielCount - 1].y_mm);
+        debugln(dbg);
+    }
+
     processSerialCommand();
 
     deltaEncoderRad = 0;
@@ -826,18 +855,21 @@ void anfrageUndAbarbeiten() {
         float zielY = ziele[i].y_mm;
         float deltaY = zielY - aktuelleY_mm;
 
-        setzeXPosition(zielX); // absolut
-        sendeStatus();
         if (deltaY > 0.5) {
             fahreStrecke(deltaY, true, true);
             aktuelleY_mm += deltaY;
             sendeStatus();
         }
+
+        setzeXPosition(zielX); // absolut
+        sendeStatus();
+
         aktiviereBuerste();
         sendeStatus();
     }
 
-    setzeZPosition(10); // Bürste wieder ganz hoch
+    setzeZPosition(10);              // Bürste wieder ganz hoch
+    fahreStrecke(250, false, false); // für nächstes Bild zurücksetzen
 }
 
 // Liest eine Zeile von Serial1 und gibt true zurück, wenn eine vollständige Zeile gelesen wurde
@@ -1023,8 +1055,8 @@ void processJoystickManualXZ(int x, int y) {
     // X-Achse: ENC_X_A/B und END_X_L / END_X_R
     if (pwmX > 0) {
         // vorwärts (rechts)
-        // respektiere rechten Endschalter
-        if (!endPressed(END_X_R)) {
+        // respektiere linken Endschalter
+        if (!endPressed(END_X_L)) {
             motorAnalogWrite(RPWM_X, pwmX);
             motorAnalogWrite(LPWM_X, 0);
         } else {
@@ -1032,8 +1064,8 @@ void processJoystickManualXZ(int x, int y) {
             motorAnalogWrite(LPWM_X, 0);
         }
     } else if (pwmX < 0) {
-        // rückwärts (links)
-        if (!endPressed(END_X_L)) {
+        // rückwärts (rechts)
+        if (!endPressed(END_X_R)) {
             motorAnalogWrite(RPWM_X, 0);
             motorAnalogWrite(LPWM_X, -pwmX);
         } else {
@@ -1105,6 +1137,56 @@ void sendeStatusJson() {
     char buffer[128];
     size_t n = serializeJson(doc, buffer);
     buffer[n] = '\0';
+    // If INA260 present, read registers and append values to the JSON
+    if (ina260_present) {
+        // Read INA260 registers: 0x01 = Current, 0x02 = Bus Voltage, 0x03 = Power
+        int16_t rawCurrent = 0;
+        uint16_t rawVoltage = 0;
+        uint16_t rawPower = 0;
+
+        // Helper lambda to read a 16-bit register
+        auto readReg16 = [&](uint8_t reg, uint16_t &out) -> bool {
+            Wire.beginTransmission(INA260_ADDR);
+            Wire.write(reg);
+            if (Wire.endTransmission() != 0)
+                return false;
+            Wire.requestFrom((uint8_t)INA260_ADDR, (uint8_t)2);
+            if (Wire.available() < 2)
+                return false;
+            uint8_t hi = Wire.read();
+            uint8_t lo = Wire.read();
+            out = (uint16_t)((hi << 8) | lo);
+            return true;
+        };
+
+        uint16_t tmp;
+        if (readReg16(0x01, (uint16_t &)tmp)) {
+            rawCurrent = (int16_t)tmp; // signed
+        }
+        if (readReg16(0x02, rawVoltage)) {
+            // rawVoltage as unsigned
+        }
+        if (readReg16(0x03, rawPower)) {
+            // rawPower as unsigned
+        }
+
+        // Convert raw values to human units using typical INA260 LSBs:
+        // current: 1 mA/LSB, bus voltage: 1.25 mV/LSB, power: 10 mW/LSB
+        int32_t current_mA = (int32_t)rawCurrent;               // mA
+        int32_t voltage_mV = (int32_t)rawVoltage * 1250 / 1000; // mV (raw * 1.25)
+        int32_t power_mW = (int32_t)rawPower * 10;              // mW
+
+        // Append to JSON
+        doc["ina_present"] = true;
+        doc["ina_current_mA"] = current_mA;
+        doc["ina_voltage_mV"] = voltage_mV;
+        doc["ina_power_mW"] = power_mW;
+
+        // Re-serialize with INA fields
+        n = serializeJson(doc, buffer);
+        buffer[n] = '\0';
+    }
+
     Serial.println("STATUS:" + String(buffer));
 }
 
@@ -1176,6 +1258,14 @@ void setup() {
     // Init OLED (Adafruit SSD1306). Probe I2C addresses to decide whether to use OLED.
     Wire.begin();
 
+    // Probe INA260 at default address
+    if (Wire.beginTransmission(INA260_ADDR), Wire.endTransmission() == 0) {
+        ina260_present = true;
+        debugln("INA260 gefunden");
+    } else {
+        ina260_present = false;
+    }
+
     bool found3C = (Wire.beginTransmission(0x3C), Wire.endTransmission() == 0);
     if (found3C) {
         oled_present = true;
@@ -1211,6 +1301,7 @@ void setup() {
 
     kalibriereZ();
     kalibriereX();
+    setzeXPosition(MITTEX); // X-Achse in Mittelstellung
 }
 
 void loop() {

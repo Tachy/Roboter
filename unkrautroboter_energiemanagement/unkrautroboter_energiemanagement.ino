@@ -60,6 +60,9 @@ const uint8_t PI_SHDN_PIN = 13; // Ausgang: HIGH → Pi soll Shutdown starten
 
 const uint8_t ADC_BAT = A1;
 const uint8_t ADC_PV = A2;
+// Optionaler Hardware-Override: Schalter an A0 gegen GND.
+// Geschlossen (gegen GND): keine Wirkung. Offen: zwinge MainState = Off (Override).
+const uint8_t MAIN_OVERRIDE_PIN = A0;
 
 // ========================= ADC & Teiler (ANPASSEN!) =========================
 // Tipp: Bei hochohmigen Teilern je 100 nF direkt am ADC-Pin gegen GND.
@@ -102,7 +105,7 @@ const uint32_t PV_RECONNECT_HOLD_MS = 2000; // 120 s stabil oberhalb
 const uint16_t RELAY_PULSE_MS = 40;
 const uint32_t PRECHARGE_MS = 2000;
 const uint32_t PI_SHUTDOWN_HOLD_MS = 1500;
-const uint32_t PI_SHUTDOWN_WAIT_MS = 1000; // 30 s warten
+const uint32_t PI_SHUTDOWN_WAIT_MS = 30000; // 30 s warten
 
 const uint32_t STABLE_REQ_MS = 3000; // für SoC-Bedingungen
 
@@ -257,6 +260,11 @@ void requestPiShutdownAndPowerOff() {
     mainOffSequence();
 }
 
+void mainOffSequenceSecret() {
+    requestPiShutdownAndPowerOff();
+    mainOffSequence();
+}
+
 // ========================= Setup =========================
 void setup() {
     uint8_t mcusr = MCUSR;
@@ -299,10 +307,12 @@ void setup() {
 
     pinMode(ADC_BAT, INPUT);
     pinMode(ADC_PV, INPUT);
+    // Configure main-override switch (pull-up). Switch to GND = closed (no effect).
+    pinMode(MAIN_OVERRIDE_PIN, INPUT_PULLUP);
 
     // Sicherer Grundzustand nach Boot
     disconnectVictronSafe(true);
-    mainOffSequence();
+    //      mainOffSequence();
 
     Serial.begin(115200); // Baudrate frei wählen, muss zum Monitor passen
     digitalWrite(LED_YELLOW, HIGH);
@@ -386,10 +396,26 @@ void loop() {
     }
 
     // ---------------- PV-ONLY Entscheidung für Victron ----------------
+    // Check main-override switch: if OPEN (pulled HIGH), force Main Off.
+    bool mainOverrideOpen = (digitalRead(MAIN_OVERRIDE_PIN) == HIGH);
+
+    logln(mainOverrideOpen ? "Main Override: OPEN" : "Main Override: CLOSED");
+    logln(mainSys == MainState::On ? "Main System: ON" : "Main System: OFF");
+
+    if (mainOverrideOpen) {
+        // Force main system off regardless of voltages
+        if (mainSys != MainState::Off) {
+            logln("Override: forcing Main OFF");
+            mainOffSequenceSecret();
+        }
+    }
+
+    // ---------------- PV-ONLY Entscheidung für Victron ----------------
     if (u_pv < PV_DISCONNECT_V) {
         disconnectVictronSafe(); // erst PV, dann Batterie
     }
 
+    // Reconnect PV / connect Victron independent of main-override
     if (u_pv > PV_RECONNECT_V) {
         connectVictronSafe(); // erst Batterie, dann PV
     }
@@ -399,7 +425,8 @@ void loop() {
         requestPiShutdownAndPowerOff();
     }
 
-    if (u_bat >= BAT_SOC50_V) {
+    // Only allow turning Main ON if override not active
+    if (!mainOverrideOpen && u_bat >= BAT_SOC50_V) {
         mainOnSequence();
     }
 

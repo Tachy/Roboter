@@ -24,26 +24,43 @@ if not logging.getLogger().hasHandlers():
 class SerialManager:
     def __init__(self):
         self.port = config.SIMULATED_SERIAL_PORT
+        self.serial = None
+        self.port_open = False
+
         try:
             self.serial = serial.Serial(
                 port=self.port, baudrate=config.BAUDRATE, timeout=1
             )
+            self.port_open = True
         except serial.SerialException:
-            self.port = config.SERIAL_PORT
-            self.serial = serial.Serial(
-                port=self.port, baudrate=config.BAUDRATE, timeout=1
+            try:
+                self.port = config.SERIAL_PORT
+                self.serial = serial.Serial(
+                    port=self.port, baudrate=config.BAUDRATE, timeout=1
+                )
+                self.port_open = True
+            except serial.SerialException as e:
+                logger.error(f"Konnte serielle Verbindung nicht herstellen: {e}")
+                self.serial = None
+                self.port_open = False
+
+        if self.port_open:
+            logger.info(f"Serielle Verbindung hergestellt auf {self.port}")
+        else:
+            logger.warning(
+                "Keine serielle Verbindung verfügbar - läuft im Offline-Modus"
             )
 
-        logger.info(f"Serielle Verbindung hergestellt auf {self.port}")
         self.buffer = ""  # Puffer für eingehende Zeichen
         self.received_lines = (
             queue.Queue()
         )  # Thread-sichere Queue für empfangene Zeilen
         self.running = True
-        # Starte den Lese-Thread
-        self.read_thread = threading.Thread(target=self._read_serial, daemon=True)
-        self.read_thread.start()
-        time.sleep(2)  # Zeit für Verbindungsaufbau
+        # Starte den Lese-Thread nur wenn Port offen ist
+        if self.port_open:
+            self.read_thread = threading.Thread(target=self._read_serial, daemon=True)
+            self.read_thread.start()
+            time.sleep(2)  # Zeit für Verbindungsaufbau
 
     def _read_serial(self):
         """Thread-Funktion zum kontinuierlichen Lesen der seriellen Schnittstelle."""
@@ -51,6 +68,10 @@ class SerialManager:
 
         while self.running:
             try:
+                if not self.port_open or not self.serial or not self.serial.is_open:
+                    time.sleep(0.1)
+                    continue
+
                 if self.serial.in_waiting:
                     # Lese ein Roh-Byte und prüfe, ob überhaupt etwas gelesen wurde
                     b = self.serial.read(1)
@@ -98,7 +119,16 @@ class SerialManager:
 
     def send_command(self, command):
         """Sendet ein Kommando an den Arduino."""
-        self.serial.write(f"{command}\n".encode())
+        if not self.port_open or not self.serial or not self.serial.is_open:
+            logger.warning(f"Kann Befehl nicht senden (Port nicht offen): {command}")
+            return False
+        try:
+            self.serial.write(f"{command}\n".encode())
+            return True
+        except serial.SerialException as e:
+            logger.error(f"Fehler beim Senden des Befehls '{command}': {e}")
+            self.port_open = False
+            return False
 
     def read_line(self):
         """Liest eine Zeile aus der Queue der empfangenen Befehle.
@@ -111,6 +141,8 @@ class SerialManager:
     def close(self):
         """Beendet den Lese-Thread und schließt die serielle Verbindung."""
         self.running = False
-        if self.read_thread.is_alive():
+        if hasattr(self, "read_thread") and self.read_thread.is_alive():
             self.read_thread.join(timeout=1.0)  # Warte max. 1 Sekunde auf Thread-Ende
-        self.serial.close()
+        if self.serial and self.serial.is_open:
+            self.serial.close()
+        self.port_open = False

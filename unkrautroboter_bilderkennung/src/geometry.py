@@ -273,11 +273,11 @@ def compute_and_save_extrinsics_from_charuco(
         gray = None
 
     # Standard-Charuco-Parameter (wie in calibration.py)
-    SQUARES_X = 13
-    SQUARES_Y = 13
-    SQUARE_MM = 40.0
-    MARKER_MM = 30.0
-    DICT_NAME = "DICT_4X4_250"
+    SQUARES_X = 10
+    SQUARES_Y = 15
+    SQUARE_MM = 50.0
+    MARKER_MM = 35.0
+    DICT_NAME = "DICT_5X5_1000"
 
     try:
         ar = cv2.aruco
