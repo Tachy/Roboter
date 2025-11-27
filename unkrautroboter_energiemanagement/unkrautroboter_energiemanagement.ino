@@ -71,9 +71,9 @@ const float ADC_REF_V = 5.0;
 const float ADC_MAX = 1023.0;
 
 // U_in = U_adc * ((Rtop + Rbottom) / Rbottom)
-// Angepasst: aus Kalibrierung mit Messpaaren (berechnet→gemessen)
-// Faktor ≈ 1.04 → Rtop neu gewählt, damit (Rtop+Rbottom)/Rbottom ≈ 11.439
-const float BAT_RTOP = 104400.0;   // angepasst ~104.4k
+// Kalibriert: Messgerät 13.30 V → Regler zeigte 13.37 V
+// Korrekturfaktor: 13.30/13.37 ≈ 0.9948 → BAT_RTOP von 104400 auf 103900
+const float BAT_RTOP = 104000.0;   // kalibriert bei 13.30 V
 const float BAT_RBOTTOM = 10000.0; // z. B. 10k
 // Nach Kalibrierung (zwei Messpunkte: 19.07/18.39 und 16.28/15.68)
 // Faktor ≈ mean(19.07/18.39, 16.28/15.68) ≈ 1.0379 -> neuer Rtop ≈ 187.2k
@@ -84,10 +84,10 @@ const float PV_RBOTTOM = 10000.0; // z. B. 10k
 // Richtwerte für *Ruhespannung* (Last weg, Temperatur ~20–25°C):
 // ~10%: ≈12.9–13.0 V  |  ~50%: ≈13.2 V  |  ~100%: 13.5–13.6 V
 // Hysterese großzügig, um Flattern zu vermeiden.
-const float BAT_SOC10_V = 12.95;   // ~10% SoC → Hauptsystem herunterfahren
+const float BAT_SOC10_V = 12.40;   // ~10% SoC → Hauptsystem herunterfahren
 const float BAT_SOC10_HYST = 0.10; // 100 mV
 
-const float BAT_SOC50_V = 13.20;   // ~50% SoC → Hauptsystem einschalten
+const float BAT_SOC50_V = 13.00;   // ~50% SoC → Hauptsystem einschalten
 const float BAT_SOC50_HYST = 0.08; // 80 mV
 
 // ========================= PV-Entscheidung NUR über PV-Spannung =========================
@@ -95,11 +95,11 @@ const float BAT_SOC50_HYST = 0.08; // 80 mV
 // - Wenn PV_V < PV_DISCONNECT für PV_DISCONNECT_HOLD_MS ⇒ Victron trennen
 // - Wenn PV_V > PV_RECONNECT  für PV_RECONNECT_HOLD_MS  ⇒ Victron verbinden
 // Richtwerte für 12V/36-Zeller (Vmp ~18 V, Voc ~21–23 V). Bitte einmessen!
-const float PV_DISCONNECT_V = 14.0;          // darunter: praktisch keine Ladeleistung → trennen
-const uint32_t PV_DISCONNECT_HOLD_MS = 2000; // 60 s stabil unterhalb
+const float PV_DISCONNECT_V = 15.0;          // darunter: praktisch keine Ladeleistung → trennen
+const uint32_t PV_DISCONNECT_HOLD_MS = 2000; // 2 s stabil unterhalb
 
-const float PV_RECONNECT_V = 16.5;          // darüber: tagsüber genug Licht vorhanden → verbinden
-const uint32_t PV_RECONNECT_HOLD_MS = 2000; // 120 s stabil oberhalb
+const float PV_RECONNECT_V = 19.0;          // darüber: tagsüber genug Licht vorhanden → verbinden
+const uint32_t PV_RECONNECT_HOLD_MS = 2000; // 2 s stabil oberhalb
 
 // ========================= Zeiten & Pulse =========================
 const uint16_t RELAY_PULSE_MS = 40;

@@ -31,7 +31,7 @@ ALLOWED_UDP_SOURCES = ["192.168.179.17", "192.168.179.186", "192.168.179.4"]
 HTTP_PORT = 8080
 
 # YOLO Setup
-USE_DUMMY = True  # Auf False setzen, wenn das echte YOLO-Modell verwendet wird
+USE_DUMMY = False  # Auf False setzen, wenn das echte YOLO-Modell verwendet wird
 YOLO_MODEL_PATH = "./model/best.pt"  # z. B. "best.pt"
 
 # Inferenz-Parameter (Subprozess mit Timeout)

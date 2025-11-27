@@ -845,7 +845,7 @@ void anfrageUndAbarbeiten() {
     deltaEncoderRad = 0;
 
     if (zielCount == 0) {
-        fahreStrecke(302, true, true);
+        fahreStrecke(500, true, true); // 50 cm vorwärts für nächstes Bild
         sendeStatus();
         return;
     }
@@ -869,7 +869,7 @@ void anfrageUndAbarbeiten() {
     }
 
     setzeZPosition(10);              // Bürste wieder ganz hoch
-    fahreStrecke(250, false, false); // für nächstes Bild zurücksetzen
+    fahreStrecke(250, false, false); // für nächstes Bild 25 cm zurücksetzen
 }
 
 // Liest eine Zeile von Serial1 und gibt true zurück, wenn eine vollständige Zeile gelesen wurde
@@ -1203,6 +1203,9 @@ void processSerialCommand() {
         } else if (cmdBuffer.indexOf("MODE:MANUAL") >= 0) {
             currentMode = MANUAL;
             debugln("RCD: MANUAL");
+            // Setze Kamera oben in die Mitte
+            setzeZPosition(10);
+            setzeXPosition(MITTEX);
         }
 
         // Format: JOYSTICK:X=-48,Y=-54[,B=3]   (optionales Button-Feld B=)
@@ -1298,7 +1301,6 @@ void setup() {
 
     kalibriereZ();
     kalibriereX();
-    setzeXPosition(MITTEX); // X-Achse in Mittelstellung
 }
 
 void loop() {
