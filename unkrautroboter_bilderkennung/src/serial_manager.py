@@ -108,10 +108,14 @@ class SerialManager:
                                     json_str = complete_command[7:]  # Nach "STATUS:"
                                     arduino_data = json.loads(json_str)
                                     status_bus.set_arduino_status(arduino_data)
-                                    logger.debug(f"Arduino-Status empfangen: {arduino_data}")
+                                    logger.debug(
+                                        f"Arduino-Status empfangen: {arduino_data}"
+                                    )
                                 except json.JSONDecodeError as e:
-                                    logger.warning(f"Ungültiger STATUS-JSON vom Arduino: {e}")
-                            
+                                    logger.warning(
+                                        f"Ungültiger STATUS-JSON vom Arduino: {e}"
+                                    )
+
                             self.received_lines.put(complete_command)
                         # Puffer zurücksetzen (auch beim leeren String)
                         self.buffer = ""
