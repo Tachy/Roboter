@@ -1134,7 +1134,7 @@ void sendeStatusJson() {
     doc["encX"] = encoderX;
     doc["encZ"] = encoderZ;
 
-    char buffer[128];
+    char buffer[255];
     size_t n = serializeJson(doc, buffer);
     buffer[n] = '\0';
     // If INA260 present, read registers and append values to the JSON
@@ -1166,15 +1166,12 @@ void sendeStatusJson() {
         if (readReg16(0x02, rawVoltage)) {
             // rawVoltage as unsigned
         }
-        if (readReg16(0x03, rawPower)) {
-            // rawPower as unsigned
-        }
 
         // Convert raw values to human units using typical INA260 LSBs:
-        // current: 1 mA/LSB, bus voltage: 1.25 mV/LSB, power: 10 mW/LSB
-        int32_t current_mA = (int32_t)rawCurrent;               // mA
-        int32_t voltage_mV = (int32_t)rawVoltage * 1250 / 1000; // mV (raw * 1.25)
-        int32_t power_mW = (int32_t)rawPower * 10;              // mW
+        // current: 1.25 mA/LSB, bus voltage: 1.25 mV/LSB, power: 10 mW/LSB
+        int32_t current_mA = (int32_t)rawCurrent * 1250 / 1000;     // mA
+        int32_t voltage_mV = (int32_t)rawVoltage * 1250 / 1000;     // mV (raw * 1.25)
+        int32_t power_mW = (int32_t)voltage_mV * current_mA / 1000; // mW
 
         // Append to JSON
         doc["ina_present"] = true;

@@ -135,6 +135,7 @@ def get_status_data():
         "world_transform_ready": geometry.is_world_transform_ready(),
         "wifi": get_wifi_status(),
         "message": status_bus.get_message(),
+        "arduino": status_bus.get_arduino_status(),
     }
     # Joystick-Daten nur im Modus MANUAL mitsenden
     if status["mode"] == "MANUAL":

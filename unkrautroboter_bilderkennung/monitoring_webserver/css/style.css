@@ -231,6 +231,17 @@ select {
     box-sizing: border-box;
 }
 
+#arduino-box {
+    width: 100%;
+    background: #222;
+    border-radius: 8px;
+    padding: 12px;
+    color: #fff;
+    font-size: 1em;
+    min-height: 70px;
+    box-sizing: border-box;
+}
+
 #last-capture-box {
     width: 100%;
     background: #222;

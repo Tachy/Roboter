@@ -1,3 +1,42 @@
+// Arduino-Statusbox aktualisieren
+function updateArduinoBox(arduino) {
+    const el = document.getElementById('arduino-content');
+    if (!el) return;
+    if (!arduino || typeof arduino !== 'object') {
+        el.innerHTML = '–';
+        return;
+    }
+    let html = '';
+    if (typeof arduino.mode === 'string') {
+        html += `Modus: <b>${arduino.mode}</b><br>`;
+    }
+    if (typeof arduino.encL === 'number') {
+        html += `Encoder L: <b>${arduino.encL}</b><br>`;
+    }
+    if (typeof arduino.encR === 'number') {
+        html += `Encoder R: <b>${arduino.encR}</b><br>`;
+    }
+    if (typeof arduino.encX === 'number') {
+        html += `Encoder X: <b>${arduino.encX}</b><br>`;
+    }
+    if (typeof arduino.encZ === 'number') {
+        html += `Encoder Z: <b>${arduino.encZ}</b><br>`;
+    }
+    if (typeof arduino.ina_present === 'boolean' && arduino.ina_present) {
+        if (typeof arduino.ina_current_mA === 'number') {
+            html += `Strom: <b>${(arduino.ina_current_mA / 1000).toFixed(2)} A</b><br>`;
+        }
+        if (typeof arduino.ina_voltage_mV === 'number') {
+            html += `Spannung: <b>${(arduino.ina_voltage_mV / 1000).toFixed(2)} V</b><br>`;
+        }
+        if (typeof arduino.ina_power_mW === 'number') {
+            html += `Leistung: <b>${(arduino.ina_power_mW / 1000).toFixed(2)} W</b>`;
+        }
+    }
+    if (html === '') html = '–';
+    el.innerHTML = html;
+}
+
 // Statusbox aktualisieren (inkl. letzte Aufnahme und Stream-Steuerung)
 function updateStatusBox(data) {
     const el = document.getElementById('status-content');
@@ -81,5 +120,10 @@ function updateStatusBox(data) {
         const active = !!data.stream;
         ensureStream(active);
         if (active) startStreamWatchdog(); else stopStreamWatchdog();
+    }
+
+    // Arduino-Status aktualisieren
+    if (data.arduino) {
+        updateArduinoBox(data.arduino);
     }
 }
