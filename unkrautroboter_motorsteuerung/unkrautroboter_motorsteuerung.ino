@@ -1,4 +1,5 @@
 #include <ArduinoJson.h>
+#include <LowPower.h>
 #include <U8g2lib.h>
 #include <Wire.h>
 
@@ -810,6 +811,23 @@ void anfrageUndAbarbeiten() {
             // Buffer zurücksetzen
             cmdBuffer = "";
         }
+        // Idle Sleep: UART bleibt aktiv, CPU wartet auf Interrupts
+        // Spart ~30-40% Strom im Vergleich zu delay() / busy-wait
+        // WICHTIG: Mega2560 braucht 14 Parameter (alle Timer/USART explizit)
+        LowPower.idle(SLEEP_250MS, // 250 ms schlafen
+                      ADC_OFF,     // Kein analogRead() → OFF
+                      TIMER5_ON,   // PWM-Timer für Motoren (falls nötig)
+                      TIMER4_ON,   // PWM-Timer
+                      TIMER3_ON,   // PWM-Timer
+                      TIMER2_ON,   // (optional, meist OFF möglich)
+                      TIMER1_ON,   // millis() / micros()
+                      TIMER0_ON,   // millis() / delay()
+                      SPI_OFF,     // Keine SPI-Geräte → OFF
+                      USART3_OFF,  // Nicht genutzt → OFF
+                      USART2_OFF,  // Nicht genutzt → OFF
+                      USART1_OFF,  // Nicht genutzt → OFF
+                      USART0_ON,   // Serial (Pi) → ON!
+                      TWI_OFF);    // Kein I2C während Sleep → OFF
     }
 
     {
@@ -1254,6 +1272,18 @@ void setup() {
 
     // Serial (USB) debug disabled for this module - use OLED display instead
     Serial.begin(115200); // Verbindung zum Raspberry Pi
+
+    // === Stromsparen: ungenutzte Peripherie dauerhaft abschalten ===
+    // ADC komplett deaktivieren (kein analogRead() im Code)
+    ADCSRA &= ~(1 << ADEN); // ADC disable (~300 µA gespart)
+
+    // SPI deaktivieren (keine SPI-Geräte angeschlossen)
+    SPCR &= ~(1 << SPE); // SPI disable (~50 µA gespart)
+
+    // USART1, USART2, USART3 deaktivieren (nur USART0 = Serial wird genutzt)
+    UCSR1B = 0; // USART1 TX/RX disable (~100 µA gespart)
+    UCSR2B = 0; // USART2 TX/RX disable (~100 µA gespart)
+    UCSR3B = 0; // USART3 TX/RX disable (~100 µA gespart)
 
     // Init OLED (Adafruit SSD1306). Probe I2C addresses to decide whether to use OLED.
     Wire.begin();

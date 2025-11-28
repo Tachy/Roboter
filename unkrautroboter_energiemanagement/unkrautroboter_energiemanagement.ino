@@ -41,6 +41,7 @@
 #include <Arduino.h> // type: ignore
 #include <EEPROM.h>
 #include <LowPower.h>
+#include <avr/wdt.h>
 
 // ========================= Pins (anpassen, falls nötig) =========================
 const uint8_t R1_RST = 2; // PV verbinden
@@ -109,6 +110,8 @@ const uint32_t PI_SHUTDOWN_WAIT_MS = 30000; // 30 s warten
 
 const uint32_t STABLE_REQ_MS = 3000; // für SoC-Bedingungen
 
+const bool SERIAL_DEBUG = false; // true=Debug-Ausgaben über Serial
+
 // ========================= Zustände =========================
 enum class VictronState { Disconnected,
                           Connected };
@@ -134,6 +137,23 @@ const char *reset_cause = NULL;
 // EEPROM-Marker zur Detektion von Abstürzen während kritischer Sequenzen
 const uint8_t EEPROM_BOOT_MARK_ADDR = 0;
 const uint8_t EEPROM_BOOT_MARK_VAL = 0x42;
+
+void delayLowPower(uint32_t ms) {
+    // Zerlege ms in 8s-Blöcke + Rest
+    while (ms >= 1000) {
+        wdt_reset();
+        LowPower.powerDown(SLEEP_1S, ADC_OFF, BOD_OFF);
+        ms -= 1000;
+    }
+
+    // Watchdog updaten
+    wdt_reset();
+
+    // Rest in ms
+    if (ms > 0) {
+        delay(ms);
+    }
+}
 
 // Oversampling (einfaches Mittel)
 uint16_t readAdcAveraged(uint8_t pin, uint8_t samples = 16) {
@@ -163,19 +183,19 @@ inline void log(const char *s) {
     if (!serial_active)
         return;
     Serial.print(s);
-    delay(5); // Kurzer Flush-Warteaufruf
+    delayLowPower(5); // Kurzer Flush-Warteaufruf
 }
 inline void logln(const char *s) {
     if (!serial_active)
         return;
     Serial.println(s);
-    delay(5); // Kurzer Flush-Warteaufruf
+    delayLowPower(5); // Kurzer Flush-Warteaufruf
 }
 
 // ========================= Relais-Helfer =========================
 void pulseHigh(uint8_t pin, uint16_t ms) {
     digitalWrite(pin, HIGH);
-    delay(ms);
+    delayLowPower(ms);
     digitalWrite(pin, LOW);
 }
 
@@ -195,12 +215,12 @@ void connectVictronSafe() {
     log("MPPT connecting...");
 
     R2_BAT_CONNECT();
-    delay(1000);
+    delayLowPower(1000);
     R1_PV_CONNECT();
 
     victron = VictronState::Connected;
     logln("OK");
-    delay(1000);
+    delayLowPower(1000);
 }
 
 void disconnectVictronSafe(bool force = false) {
@@ -211,7 +231,7 @@ void disconnectVictronSafe(bool force = false) {
     log("MPPT disconnecting...");
 
     R1_PV_DISCONN();
-    delay(50);
+    delayLowPower(50);
     R2_BAT_DISCONN();
 
     victron = VictronState::Disconnected;
@@ -223,23 +243,17 @@ void mainOnSequence() {
     if (mainSys == MainState::On)
         return;
 
-    // EEPROM-Marker setzen: beginne kritische Sequenz (Precharge)
-    EEPROM.update(EEPROM_BOOT_MARK_ADDR, EEPROM_BOOT_MARK_VAL);
-
     log("Precharge....");
     R3_PRECH_ON();
-    delay(PRECHARGE_MS);
+    delayLowPower(PRECHARGE_MS);
     R4_MAIN_ON();
     mainSys = MainState::On;
     logln("Hauptsystem an");
-
-    // Erfolgreicher Abschluss: Marker löschen
-    EEPROM.update(EEPROM_BOOT_MARK_ADDR, 0);
 }
 
 void mainOffSequence() {
     R4_MAIN_OFF();
-    delay(80);
+    delayLowPower(80);
     R3_PRECH_OFF();
     mainSys = MainState::Off;
     logln("Hauptsystem aus");
@@ -253,9 +267,9 @@ void requestPiShutdownAndPowerOff() {
     log("Pi shutdown...");
     digitalWrite(PI_SHDN_PIN, HIGH);
     // Kurzer Puls zum Starten des Pi-Shutdowns
-    delay(PI_SHUTDOWN_HOLD_MS);
+    delayLowPower(PI_SHUTDOWN_HOLD_MS);
     digitalWrite(PI_SHDN_PIN, LOW);
-    delay(PI_SHUTDOWN_WAIT_MS);
+    delayLowPower(PI_SHUTDOWN_WAIT_MS);
     logln("OK.");
     mainOffSequence();
 }
@@ -278,17 +292,6 @@ void setup() {
     else if (mcusr & (1 << WDRF))
         reset_cause = "Reset Ursache: Watchdog Reset";
 
-    // Prüfe EEPROM-Marker vom vorherigen Lauf (z.B. Absturz in Precharge)
-    uint8_t prev_mark = EEPROM.read(EEPROM_BOOT_MARK_ADDR);
-    if (prev_mark == EEPROM_BOOT_MARK_VAL) {
-        // Vorheriger Lauf hat während kritischer Sequenz (Precharge/main) abgebrochen
-        // Log nur falls Serial aktiv wird später
-        // Wir hängen diese Info an reset_cause an (oder loggen separat)
-        reset_cause = "Vorheriger Lauf: Absturz waehrend Precharge/Hauptsequenz";
-        // Marker löschen
-        EEPROM.update(EEPROM_BOOT_MARK_ADDR, 0);
-    }
-
     pinMode(R1_SET, OUTPUT);
     pinMode(R1_RST, OUTPUT);
     pinMode(R2_SET, OUTPUT);
@@ -297,6 +300,15 @@ void setup() {
     pinMode(R3_RST, OUTPUT);
     pinMode(R4_SET, OUTPUT);
     pinMode(R4_RST, OUTPUT);
+
+    digitalWrite(R1_SET, LOW);
+    digitalWrite(R1_RST, LOW);
+    digitalWrite(R2_SET, LOW);
+    digitalWrite(R2_RST, LOW);
+    digitalWrite(R3_SET, LOW);
+    digitalWrite(R3_RST, LOW);
+    digitalWrite(R4_SET, LOW);
+    digitalWrite(R4_RST, LOW);
 
     pinMode(LED_RED, OUTPUT);
     pinMode(LED_YELLOW, OUTPUT);
@@ -314,21 +326,31 @@ void setup() {
     disconnectVictronSafe(true);
     //      mainOffSequence();
 
-    Serial.begin(115200); // Baudrate frei wählen, muss zum Monitor passen
-    digitalWrite(LED_YELLOW, HIGH);
-    delay(1000); // (Tipp) kurzer Start-Delay, weil Öffnen des Monitors resetten kann
-    digitalWrite(LED_YELLOW, LOW);
-    // Prüfen, ob serieller Host tatsächlich offen ist (heuristisch)
-    serial_active = serialPortOpen();
+    if (SERIAL_DEBUG) {
+        Serial.begin(115200); // Baudrate frei wählen, muss zum Monitor passen
+        delayLowPower(1000);  // (Tipp) kurzer Start-Delay, weil Öffnen des Monitors resetten kann
+        // Prüfen, ob serieller Host tatsächlich offen ist (heuristisch)
+        serial_active = serialPortOpen();
+    } else {
+        serial_active = false;
+    }
 
+    if (!serial_active) {
+        // Serieller Monitor nicht offen: LED rot blinken lassen
+        digitalWrite(LED_YELLOW, HIGH);
+        delayLowPower(200);
+        digitalWrite(LED_YELLOW, LOW);
+        delayLowPower(200);
+    }
     logln("Hallo vom Pro Mini!");
     if (reset_cause) {
         logln(reset_cause);
         reset_cause = NULL;
     }
 
-    // (Optional) Hier könnte man initial direkt Batterie->Victron verbinden,
-    // wenn PV ausreichend ist – wir warten aber auf die PV-Reconnect-Bedingung.
+    // Watchdog auf 2 Sekunden initialisieren
+    wdt_enable(WDTO_2S);
+    logln("Watchdog: 2s aktiv");
 }
 
 // ========================= Hauptlogik =========================
@@ -453,5 +475,6 @@ void loop() {
 
     // 1 Sekunde schlafen
     // Flush serial to avoid truncation/corruption of outgoing bytes when MCU sleeps
-    LowPower.powerDown(SLEEP_1S, ADC_OFF, BOD_OFF);
+
+    delayLowPower(1000);
 }
