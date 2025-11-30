@@ -25,8 +25,15 @@ static bool oled_has_current_line = false;
 // Flag whether OLED init succeeded
 static bool oled_present = false;
 
+// === Globale Variablen für robusten Serial-Empfang ===
+#define SERIAL_BUFFER_SIZE 256
+static volatile char serialRxBuffer[SERIAL_BUFFER_SIZE];
+static volatile uint16_t serialRxHead = 0;
+static volatile bool serialLineReady = false;
+
 // === KONSTANTEN ===
 #define PWM_MIN 60
+#define PWM_MIN_RAD 40
 #define MAX_KOORDINATEN 50
 #define PWM_MAX 255
 #define RAMP_UP_TIME_MS 1000
@@ -80,6 +87,9 @@ Mode currentMode = WAITING_FOR_START; // Startet im Wartezustand
 #define END_Z_O 29
 #define END_Z_U 30
 
+#define RESET_PRO_MINI 32
+#define RELAIS_HS 33
+
 // Arduino-Pins Bürstenmotor
 #define PWM_BRUSH 46
 
@@ -132,6 +142,10 @@ struct Zielpunkt {
 Zielpunkt ziele[MAX_KOORDINATEN];
 int zielCount = 0;
 float aktuelleY_mm = 0;
+
+// Flags für Koordinatenempfang in processSerialCommand()
+static bool waitingForCoordinates = false;
+static bool coordinatesComplete = false;
 
 volatile long encoderBrush = 0;
 
@@ -249,6 +263,60 @@ void debugCursorUp() {
 
     // remove last line from buffer so next debug/debugln will overwrite that row
     oled_line_count--;
+}
+
+// Hilfsfunktion: leert Hardware-RX-Buffer in Software-Buffer
+// Wird von Timer2-ISR alle 5ms UND vom Framework nach loop() aufgerufen
+void serialEvent() {
+    while (Serial.available() && !serialLineReady) {
+        char c = Serial.read();
+
+        if (c == '\n') {
+            serialRxBuffer[serialRxHead] = '\0';
+            serialLineReady = true;
+            return;
+        } else if (c != '\r') {
+            if (serialRxHead < SERIAL_BUFFER_SIZE - 1) {
+                serialRxBuffer[serialRxHead++] = c;
+            } else {
+                // Buffer voll -> Reset (verhindert Überlauf)
+                serialRxHead = 0;
+            }
+        }
+    }
+}
+
+// Timer2 Compare Match ISR: ruft serialEvent() alle 5ms im Hintergrund auf
+// Läuft parallel zu Encoder-ISRs und Bewegungsfunktionen
+ISR(TIMER2_COMPA_vect) {
+    serialEvent(); // Hardware-RX-Buffer in Software-Buffer kopieren
+}
+
+void setupTimer2SerialPolling() {
+    // Timer2: 8-Bit, Prescaler 1024 -> 16 MHz / 1024 / 78 = ~200 Hz (5 ms)
+    // Bei 115200 Baud: 11.5 Zeichen/ms -> 5ms = max 57 Zeichen -> Hardware-Buffer (64 Byte) sicher
+    cli(); // Interrupts global aus
+
+    TCCR2A = 0;
+    TCCR2B = 0;
+    TCNT2 = 0;
+    OCR2A = 77;                                        // (16000000 / 1024 / 200) - 1 = 77.125
+    TCCR2A |= (1 << WGM21);                            // CTC mode
+    TCCR2B |= (1 << CS22) | (1 << CS21) | (1 << CS20); // Prescaler 1024
+    TIMSK2 |= (1 << OCIE2A);                           // Enable Compare Match Interrupt
+
+    sei(); // Interrupts global an
+}
+
+// Neue nicht-blockierende readSerialLine() (aufgerufen in loop/processSerialCommand)
+bool readSerialLine(String &buffer) {
+    if (serialLineReady) {
+        buffer = String((const char *)serialRxBuffer);
+        serialRxHead = 0;
+        serialLineReady = false;
+        return true;
+    }
+    return false;
 }
 
 // Motoren
@@ -622,7 +690,7 @@ void aktiviereBuerste() {
 
     bool erfolgreich = false;
 
-    const float start_mm = 30.0f;
+    const float start_mm = 40.0f;
     const float zielPos_mm = 50.0f; // Ziel: 50 mm
     const float step_mm = 5.0f;     // Schrittweite in mm pro setzeZPosition-Aufruf
 
@@ -712,24 +780,24 @@ void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
         // Linear accel from start and decel to goal (same mapping as setzeXPosition)
         int pwmAccel;
         if (distFromStart <= MIN_RAMP_IMP) {
-            pwmAccel = PWM_MIN;
+            pwmAccel = PWM_MIN_RAD;
         } else if (distFromStart >= MAX_RAMP_IMP) {
             pwmAccel = PWM_MAX;
         } else {
-            long numerA = (long)(distFromStart - MIN_RAMP_IMP) * (PWM_MAX - PWM_MIN);
+            long numerA = (long)(distFromStart - MIN_RAMP_IMP) * (PWM_MAX - PWM_MIN_RAD);
             long denomA = (MAX_RAMP_IMP - MIN_RAMP_IMP > 0) ? (MAX_RAMP_IMP - MIN_RAMP_IMP) : 1;
-            pwmAccel = PWM_MIN + (int)(numerA / denomA);
+            pwmAccel = PWM_MIN_RAD + (int)(numerA / denomA);
         }
 
         int pwmDecel;
         if (distToGoal <= MIN_RAMP_IMP) {
-            pwmDecel = PWM_MIN;
+            pwmDecel = PWM_MIN_RAD;
         } else if (distToGoal >= MAX_RAMP_IMP) {
             pwmDecel = PWM_MAX;
         } else {
-            long numerD = (long)(distToGoal - MIN_RAMP_IMP) * (PWM_MAX - PWM_MIN);
+            long numerD = (long)(distToGoal - MIN_RAMP_IMP) * (PWM_MAX - PWM_MIN_RAD);
             long denomD = (MAX_RAMP_IMP - MIN_RAMP_IMP > 0) ? (MAX_RAMP_IMP - MIN_RAMP_IMP) : 1;
-            pwmDecel = PWM_MIN + (int)(numerD / denomD);
+            pwmDecel = PWM_MIN_RAD + (int)(numerD / denomD);
         }
 
         int pwm = (pwmAccel < pwmDecel) ? pwmAccel : pwmDecel;
@@ -752,8 +820,8 @@ void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
         }
 
         // Constrain to allowed PWM range (don't boost the slower wheel)
-        pwmL = constrain(pwmL, PWM_MIN, PWM_MAX);
-        pwmR = constrain(pwmR, PWM_MIN, PWM_MAX);
+        pwmL = constrain(pwmL, PWM_MIN_RAD, PWM_MAX);
+        pwmR = constrain(pwmR, PWM_MIN_RAD, PWM_MAX);
 
         // vorLinks/vorRechts: true = vorwärts (RPWM), false = rückwärts (LPWM)
         motorAnalogWrite(RPWM_L, vorLinks ? pwmL : 0);
@@ -790,45 +858,24 @@ void anfrageUndAbarbeiten() {
 
     zielCount = 0;
     unsigned long start = millis();
-    String cmdBuffer = "";
 
-    while (millis() - start < 60000) {
+    // Aktiviere Koordinatenempfang in processSerialCommand()
+    waitingForCoordinates = true;
+    coordinatesComplete = false;
+
+    while (millis() - start < 60000 && !coordinatesComplete) {
         sendeStatus();
-        if (readSerialLine(cmdBuffer)) {
-            // Prüfe auf Ende der Übertragung
-            if (cmdBuffer == "DONE") {
-                break;
-            }
-            // Verarbeite Koordinaten
-            if (cmdBuffer.startsWith("XY:")) {
-                int kommateil = cmdBuffer.indexOf(',');
-                if (kommateil > 3 && zielCount < MAX_KOORDINATEN) {
-                    float x = cmdBuffer.substring(3, kommateil).toFloat();
-                    float y = cmdBuffer.substring(kommateil + 1).toFloat();
-                    ziele[zielCount++] = {x, y};
-                }
-            }
-            // Buffer zurücksetzen
-            cmdBuffer = "";
-        }
-        // Idle Sleep: UART bleibt aktiv, CPU wartet auf Interrupts
-        // Spart ~30-40% Strom im Vergleich zu delay() / busy-wait
-        // WICHTIG: Mega2560 braucht 14 Parameter (alle Timer/USART explizit)
-        LowPower.idle(SLEEP_250MS, // 250 ms schlafen
-                      ADC_OFF,     // Kein analogRead() → OFF
-                      TIMER5_ON,   // PWM-Timer für Motoren (falls nötig)
-                      TIMER4_ON,   // PWM-Timer
-                      TIMER3_ON,   // PWM-Timer
-                      TIMER2_ON,   // (optional, meist OFF möglich)
-                      TIMER1_ON,   // millis() / micros()
-                      TIMER0_ON,   // millis() / delay()
-                      SPI_OFF,     // Keine SPI-Geräte → OFF
-                      USART3_OFF,  // Nicht genutzt → OFF
-                      USART2_OFF,  // Nicht genutzt → OFF
-                      USART1_OFF,  // Nicht genutzt → OFF
-                      USART0_ON,   // Serial (Pi) → ON!
-                      TWI_OFF);    // Kein I2C während Sleep → OFF
+        processSerialCommand(); // zentrale Verarbeitung (inkl. XY: und DONE)
+
+        // Kurzes idle() spart Strom, Timer2-ISR läuft weiter
+        LowPower.idle(SLEEP_15MS, ADC_OFF,
+                      TIMER5_ON, TIMER4_ON, TIMER3_ON, TIMER2_ON,
+                      TIMER1_ON, TIMER0_ON, SPI_OFF,
+                      USART3_OFF, USART2_OFF, USART1_OFF, USART0_ON, TWI_OFF);
     }
+
+    // Koordinatenempfang beenden
+    waitingForCoordinates = false;
 
     {
         char tmp[64];
@@ -888,35 +935,7 @@ void anfrageUndAbarbeiten() {
 
     setzeZPosition(10);              // Bürste wieder ganz hoch
     fahreStrecke(250, false, false); // für nächstes Bild 25 cm zurücksetzen
-}
-
-// Liest eine Zeile von Serial1 und gibt true zurück, wenn eine vollständige Zeile gelesen wurde
-bool readSerialLine(String &buffer) {
-    while (Serial.available()) {
-        char c = Serial.read();
-
-        // Zeile vollständig wenn \n empfangen
-        if (c == '\n') {
-            return true;
-        }
-        // Ignoriere CR
-        else if (c == '\r') {
-            continue;
-        }
-        // Füge Zeichen zum Buffer hinzu wenn noch Platz
-        else if (buffer.length() < MAX_CMD_LENGTH) {
-            buffer += c;
-        }
-
-        // Buffer-Überlauf: Verwerfe alles bis zum nächsten Zeilenende
-        if (buffer.length() >= MAX_CMD_LENGTH) {
-            buffer = "";
-            while (Serial.available() && Serial.read() != '\n')
-                ;
-            return false;
-        }
-    }
-    return false;
+    setzeXPosition(MITTEX);
 }
 
 // clamp-Hilfsfunktion
@@ -953,9 +972,9 @@ void joystickToPwm(int16_t x, int16_t y, int16_t *pwmL, int16_t *pwmR) {
             return 255;
         // map 1..254..255 to PWM_MIN..255
         // Use integer math: mapped = PWM_MIN + (mag-1)*(255-PWM_MIN)/254
-        int32_t numer = (int32_t)(mag - 1) * (255 - PWM_MIN);
+        int32_t numer = (int32_t)(mag - 1) * (255 - PWM_MIN_RAD);
         int32_t denom = 254; // 255-1
-        int32_t mapped = PWM_MIN + (numer / denom);
+        int32_t mapped = PWM_MIN_RAD + (numer / denom);
         if (mapped > 255)
             mapped = 255;
         return (int16_t)mapped;
@@ -1214,6 +1233,32 @@ void processSerialCommand() {
     // Verarbeite nur vollständige Zeilen
     if (lineComplete) {
 
+        // XY-Koordinaten während anfrageUndAbarbeiten() sammeln
+        // Diese werden speziell behandelt, aber andere Befehle durchlaufen normal
+        if (waitingForCoordinates) {
+            if (cmdBuffer == "DONE") {
+                coordinatesComplete = true;
+                debugln("RCD: DONE (Koordinaten komplett)");
+                cmdBuffer = "";
+                lineComplete = false;
+                return;
+            } else if (cmdBuffer.startsWith("XY:")) {
+                int kommateil = cmdBuffer.indexOf(',');
+                if (kommateil > 3 && zielCount < MAX_KOORDINATEN) {
+                    float x = cmdBuffer.substring(3, kommateil).toFloat();
+                    float y = cmdBuffer.substring(kommateil + 1).toFloat();
+                    ziele[zielCount++] = {x, y};
+                    char tmp[64];
+                    snprintf(tmp, sizeof(tmp), "RCD: XY %.1f,%.1f (%d)", x, y, zielCount);
+                    debugln(tmp);
+                }
+                cmdBuffer = "";
+                lineComplete = false;
+                return;
+            }
+            // Andere Befehle (MODE:, JOYSTICK:) werden normal verarbeitet (kein return)
+        }
+
         // Befehl auswerten basierend auf Keywords (indexOf >= 0 bedeutet "gefunden")
         if (cmdBuffer.indexOf("MODE:AUTO") >= 0) {
             currentMode = AUTO;
@@ -1308,11 +1353,15 @@ void setup() {
     } else {
         oled_present = false;
     }
-
     // oled already initialized above (if present)
     oled_line_count = 0;
     oled_cur_len = 0;
     debugln("Programm gestartet");
+
+    // Timer2-Interrupt: serialEvent() wird alle 5ms im Hintergrund aufgerufen
+    // -> Hardware-RX-Buffer (64 Byte) läuft nie über, auch während langer Bewegungen
+    setupTimer2SerialPolling();
+    debugln("Timer2 Serial-Polling aktiv (5ms)");
 
     initMotorPWM18kHz(); // Alle Motor-PWM Kanäle initialisieren
 
@@ -1328,6 +1377,17 @@ void setup() {
     pinMode(END_Z_O, INPUT_PULLUP);
     pinMode(END_X_R, INPUT_PULLUP);
     pinMode(END_Z_U, INPUT_PULLUP);
+
+    pinMode(RELAIS_HS, INPUT); // Relais-HS prüfen
+    pinMode(RESET_PRO_MINI, OUTPUT);
+
+    if (digitalRead(RELAIS_HS) == HIGH) {
+        // Relais-HS geschlossen -> Reset Pro-Mini
+        digitalWrite(RESET_PRO_MINI, HIGH);
+        delay(100);
+        digitalWrite(RESET_PRO_MINI, LOW);
+        debugln("Pro-Mini zurückgesetzt (Relais-HS aktiv)");
+    }
 
     kalibriereZ();
     kalibriereX();

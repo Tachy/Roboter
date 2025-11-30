@@ -41,17 +41,16 @@
 #include <Arduino.h> // type: ignore
 #include <EEPROM.h>
 #include <LowPower.h>
-#include <avr/wdt.h>
 
 // ========================= Pins (anpassen, falls nötig) =========================
-const uint8_t R1_RST = 2; // PV verbinden
-const uint8_t R1_SET = 3; // PV trennen
-const uint8_t R2_RST = 4; // Batterie verbinden
-const uint8_t R2_SET = 5; // Batterie trennen
-const uint8_t R3_RST = 6; // Precharge ein
-const uint8_t R3_SET = 7; // Precharge aus
-const uint8_t R4_RST = 8; // Hauptpfad XL4015 ein
-const uint8_t R4_SET = 9; // Hauptpfad XL4015 aus
+const uint8_t R1_RST = 2; // PV trennen
+const uint8_t R1_SET = 3; // PV verbinden
+const uint8_t R2_RST = 4; // Batterie trennen
+const uint8_t R2_SET = 5; // Batterie verbinden
+const uint8_t R3_RST = 6; // Precharge aus
+const uint8_t R3_SET = 7; // Precharge ein
+const uint8_t R4_RST = 8; // Hauptpfad XL4015 aus
+const uint8_t R4_SET = 9; // Hauptpfad XL4015 ein
 
 const uint8_t LED_RED = 12;    // LED rot
 const uint8_t LED_YELLOW = 11; // LED gelb
@@ -134,21 +133,13 @@ float sum_pv = 0.0f;
 // Globales Flag: Setzt setup() nach Prüfung der seriellen Schnittstelle
 bool serial_active = false;
 const char *reset_cause = NULL;
-// EEPROM-Marker zur Detektion von Abstürzen während kritischer Sequenzen
-const uint8_t EEPROM_BOOT_MARK_ADDR = 0;
-const uint8_t EEPROM_BOOT_MARK_VAL = 0x42;
 
 void delayLowPower(uint32_t ms) {
     // Zerlege ms in 8s-Blöcke + Rest
     while (ms >= 1000) {
-        wdt_reset();
         LowPower.powerDown(SLEEP_1S, ADC_OFF, BOD_OFF);
         ms -= 1000;
     }
-
-    // Watchdog updaten
-    wdt_reset();
-
     // Rest in ms
     if (ms > 0) {
         delay(ms);
@@ -347,14 +338,11 @@ void setup() {
         logln(reset_cause);
         reset_cause = NULL;
     }
-
-    // Watchdog auf 2 Sekunden initialisieren
-    wdt_enable(WDTO_2S);
-    logln("Watchdog: 2s aktiv");
 }
 
 // ========================= Hauptlogik =========================
 void loop() {
+
     const uint32_t now = millis();
 
     // Spannungen einlesen (je Messzyklus einmal) und ins Historien-Window schieben
