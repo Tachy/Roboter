@@ -1,7 +1,7 @@
 # Start in Powershell!
 # C:\Users\johan\OneDrive\Documents\KI-Projekte\Roboter\unkrautroboter_bilderkennung>  python3 joystick_steuerung.py
 
-import pygame
+import pygame  # type: ignore
 import socket
 import time
 import threading
@@ -43,12 +43,8 @@ def joystick_to_udp(joystick):
     # Per-button edge detection / latch state
     last_button_state_1 = 0
     last_button_state_3 = 0
-    button_pending_1 = (
-        False  # wurde seit der letzten Sendung ein Klick für B=1 erkannt?
-    )
-    button_pending_3 = (
-        False  # wurde seit der letzten Sendung ein Klick für B=3 erkannt?
-    )
+    button_pending_1 = False  # wurde seit der letzten Sendung ein Klick für B=1 erkannt?
+    button_pending_3 = False  # wurde seit der letzten Sendung ein Klick für B=3 erkannt?
     last_send_ms = 0
     last_x_value = 0
     last_y_value = 0
