@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Language
+
+Always respond to the user in German. Code, identifiers, and code comments stay in English.
+
 ## Project Overview
 
 A solar-powered weed-removal robot (Unkrautroboter) that detects weeds growing in pavement cracks using AI (YOLOv8), drives to their location, and removes them with a rotating wire brush. Three distinct hardware controllers each have their own codebase:

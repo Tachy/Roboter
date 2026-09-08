@@ -2,17 +2,25 @@
 name = "unkrautroboter-bilderkennung"
 version = "0.1.0"
 description = "Bilderkennungssystem für einen Unkrautroboter"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["Johannes Güntert <johannes@gutshof-guentert.de>"]
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.8"
-picamera2 = "*"
-pillow = "*"
-pyserial = "*"
-ultralytics = "*"
+python = "^3.9"
+picamera2 = "*"          # Systempaket auf dem Pi (apt), kein PyPI-Pin sinnvoll
+pillow = ">=10.0"
+pyserial = ">=3.5"
+ultralytics = ">=8.0.200"
+numpy = ">=1.24"         # direkt genutzt (geometry, yolo_detector, camera)
+websockets = ">=11.0"    # status_ws_server – vorher nicht deklariert
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 

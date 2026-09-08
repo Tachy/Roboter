@@ -55,89 +55,114 @@ class SerialManager:
         self.received_lines = (
             queue.Queue()
         )  # Thread-sichere Queue für empfangene Zeilen
+        self._write_lock = threading.Lock()  # send_command aus mehreren Threads
         self.running = True
-        # Starte den Lese-Thread nur wenn Port offen ist
+        # Lese-Thread immer starten: er baut den Port bei Bedarf mit Backoff neu auf
+        # (auch wenn der erste Verbindungsversuch fehlgeschlagen ist).
+        self.read_thread = threading.Thread(target=self._read_serial, daemon=True)
+        self.read_thread.start()
         if self.port_open:
-            self.read_thread = threading.Thread(target=self._read_serial, daemon=True)
-            self.read_thread.start()
             time.sleep(2)  # Zeit für Verbindungsaufbau
 
-    def _read_serial(self):
-        """Thread-Funktion zum kontinuierlichen Lesen der seriellen Schnittstelle."""
-        import os
+    def _safe_close_port(self):
+        """Schließt den Port ohne zu werfen und verwirft den Zeilenpuffer."""
+        self.port_open = False
+        try:
+            if self.serial and self.serial.is_open:
+                self.serial.close()
+        except Exception:
+            pass
+        self.buffer = ""
 
+    def _try_reopen(self) -> bool:
+        """Versucht, den seriellen Port neu zu öffnen (erst simuliert, dann echt).
+        Gibt True zurück, wenn eine Verbindung besteht."""
+        for port in (config.SIMULATED_SERIAL_PORT, config.SERIAL_PORT):
+            try:
+                self.serial = serial.Serial(
+                    port=port, baudrate=config.BAUDRATE, timeout=1
+                )
+                self.port = port
+                self.port_open = True
+                return True
+            except serial.SerialException:
+                continue
+        self.serial = None
+        self.port_open = False
+        return False
+
+    def _dispatch_line(self, line: str) -> None:
+        """Eine vollständige empfangene Zeile verarbeiten (STATUS-JSON + Queue)."""
+        logger.info(f"Kompletter Befehl: {line}")
+        if line.startswith("STATUS:"):
+            try:
+                arduino_data = json.loads(line[7:])
+                status_bus.set_arduino_status(arduino_data)
+                logger.debug(f"Arduino-Status empfangen: {arduino_data}")
+            except json.JSONDecodeError as e:
+                logger.warning(f"Ungültiger STATUS-JSON vom Arduino: {e}")
+        self.received_lines.put(line)
+
+    def _read_serial(self):
+        """Thread-Funktion zum kontinuierlichen Lesen der seriellen Schnittstelle.
+
+        Bei Fehlern wird der Port geschlossen und mit Backoff neu verbunden – der
+        Prozess wird NICHT mehr beendet."""
+        reconnect_delay = 0.5
         while self.running:
             try:
                 if not self.port_open or not self.serial or not self.serial.is_open:
-                    time.sleep(0.1)
+                    if self._try_reopen():
+                        logger.info(
+                            f"Serielle Verbindung (wieder) hergestellt auf {self.port}"
+                        )
+                        reconnect_delay = 0.5
+                    else:
+                        time.sleep(reconnect_delay)
+                        reconnect_delay = min(reconnect_delay * 2, 10.0)
                     continue
 
-                if self.serial.in_waiting:
-                    # Lese ein Roh-Byte und prüfe, ob überhaupt etwas gelesen wurde
-                    b = self.serial.read(1)
-                    if not b:
-                        # Kein Byte empfangen (Timeout) — kurz schlafen und weiter
+                n = self.serial.in_waiting
+                if n:
+                    # Alles verfügbare am Stück lesen statt Byte für Byte (L2).
+                    chunk = self.serial.read(n)
+                    if not chunk:
                         time.sleep(0.01)
                         continue
-                    val = b[0]
-                    # Versuche die Darstellung als String (für Puffer/Zeilenbau)
-                    try:
-                        char = b.decode(errors="ignore")
-                    except Exception:
-                        char = ""
-                    logger.debug(f"Empfangenes Byte: 0x{val:02x}")
-
-                    # Zeilenende erfasst?
-                    if char == "\n":
-                        complete_command = self.buffer.strip()
-                        if complete_command:
-                            logger.info(f"Kompletter Befehl: {complete_command}")
-                            # sichere Byte-Darstellung der kompletten Zeile
-                            logger.debug(
-                                "Als Bytes: %s",
-                                " ".join(
-                                    f"0x{bb:02x}"
-                                    for bb in complete_command.encode(
-                                        "utf-8", errors="replace"
-                                    )
-                                ),
-                            )
-                            # Prüfe ob STATUS-JSON vom Arduino
-                            if complete_command.startswith("STATUS:"):
-                                try:
-                                    json_str = complete_command[7:]  # Nach "STATUS:"
-                                    arduino_data = json.loads(json_str)
-                                    status_bus.set_arduino_status(arduino_data)
-                                    logger.debug(
-                                        f"Arduino-Status empfangen: {arduino_data}"
-                                    )
-                                except json.JSONDecodeError as e:
-                                    logger.warning(
-                                        f"Ungültiger STATUS-JSON vom Arduino: {e}"
-                                    )
-
-                            self.received_lines.put(complete_command)
-                        # Puffer zurücksetzen (auch beim leeren String)
-                        self.buffer = ""
-                    else:
-                        # Normales Zeichen an Puffer anhängen
-                        self.buffer += char
+                    for ch in chunk.decode(errors="ignore"):
+                        if ch == "\r":
+                            continue
+                        if ch == "\n":
+                            line = self.buffer.strip()
+                            self.buffer = ""
+                            if line:
+                                self._dispatch_line(line)
+                        else:
+                            self.buffer += ch
+                            if len(self.buffer) > 4096:
+                                logger.warning(
+                                    "Serieller Zeilenpuffer zu groß – verworfen."
+                                )
+                                self.buffer = ""
                 else:
-                    # Keine Daten verfügbar -> kurz schlafen, um CPU-Load zu reduzieren
+                    # Keine Daten verfügbar -> kurz schlafen, um CPU-Last zu reduzieren
                     time.sleep(0.01)
             except Exception as e:
                 logger.error(
-                    f"Schwerwiegender Fehler in der seriellen Schnittstelle: {e}"
+                    f"Fehler in der seriellen Schnittstelle: {e} – schließe Port, "
+                    f"Reconnect folgt."
                 )
-                os._exit(1)
+                self._safe_close_port()
+                time.sleep(0.5)
 
     def send_command(self, command):
-        """Sendet ein Kommando an den Arduino."""
+        """Sendet ein Kommando an den Arduino. Thread-sicher (Schreib-Lock)."""
         if not self.port_open or not self.serial or not self.serial.is_open:
             logger.warning(f"Kann Befehl nicht senden (Port nicht offen): {command}")
             return False
         try:
-            self.serial.write(f"{command}\n".encode())
+            with self._write_lock:
+                self.serial.write(f"{command}\n".encode())
             return True
         except serial.SerialException as e:
             logger.error(f"Fehler beim Senden des Befehls '{command}': {e}")

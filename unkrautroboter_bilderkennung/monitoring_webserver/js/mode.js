@@ -6,7 +6,7 @@ async function changeMode() {
         await fetch("send_udp.php", {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: `mode=${mode}`,
+            body: `mode=${encodeURIComponent(mode)}&token=${encodeURIComponent(CONFIG.CONTROL_TOKEN)}`,
         });
     } catch (error) {
         console.error(`Fehler beim Senden des Modus: ${error.message}`);

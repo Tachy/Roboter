@@ -1,5 +1,5 @@
-# Start in Powershell!
-# C:\Users\johan\OneDrive\Documents\KI-Projekte\Roboter\unkrautroboter_bilderkennung>  python3 joystick_steuerung.py
+# Start (PowerShell), aus dem Ordner dieses Skripts:
+#   .../unkrautroboter_bilderkennung/joysticksteuerung_pc>  python joystick_steuerung.py
 
 import pygame  # type: ignore
 import socket
@@ -7,8 +7,10 @@ import time
 import threading
 
 # Raspberry Pi UDP-Konfiguration
+# WLAN-IP des Roboters. Am Router als feste DHCP-Reservierung eintragen (oder per
+# mDNS-Hostname ansprechen), damit ein neuer Lease die Verbindung nicht abhängt.
 UDP_IP = "192.168.179.252"  # IP-Adresse des Raspberry Pi
-UDP_PORT = 5006  # Neuer UDP-Port für Joystick-Daten
+UDP_PORT = 5006  # UDP-Port für Joystick-Daten
 
 
 # Joystick-Initialisierung

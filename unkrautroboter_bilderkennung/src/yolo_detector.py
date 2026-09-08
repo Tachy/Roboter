@@ -319,7 +319,9 @@ def process_image(image_path):
             )
             return []
         try:
-            payload = q.get_nowait()
+            # Kurzer Timeout statt get_nowait(): der Kindprozess kann das Ergebnis
+            # erst kurz nach dem join() in die Pipe geschrieben haben (L8).
+            payload = q.get(timeout=5)
         except Exception:
             payload = None
         coords, ann_path = [], None

@@ -5,7 +5,6 @@ Modul für das Training und die Bildaufnahme des Unkrautroboters.
 import os
 import glob
 import logging
-from . import config
 from . import config, camera
 
 # Logger einrichten

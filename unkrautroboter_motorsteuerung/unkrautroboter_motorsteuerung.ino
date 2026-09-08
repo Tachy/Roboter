@@ -2,6 +2,28 @@
 #include <LowPower.h>
 #include <U8g2lib.h>
 #include <Wire.h>
+#include <avr/wdt.h>
+
+// --- Hardware-Watchdog (M7) ---
+// Auf 0 setzen, falls der WDT am Prüfstand Probleme macht (z. B. Resets mitten im
+// AUTO-Zyklus). Die frühe Abschaltung in .init3 bleibt in jedem Fall aktiv und
+// verhindert eine Reset-Schleife mit dem MEGA-Bootloader.
+#define ENABLE_WATCHDOG 1
+#if ENABLE_WATCHDOG
+#define WDT_FEED() wdt_reset()
+#define WDT_ARM() wdt_enable(WDTO_8S)
+#else
+#define WDT_FEED() ((void)0)
+#define WDT_ARM() ((void)0)
+#endif
+
+// Läuft in .init3 (vor main()/setup()): WDT bei JEDEM Reset sofort abschalten,
+// sonst kann ein WDT-Reset mit dem Standard-Bootloader in einer Schleife hängen.
+void wdtInitEarly(void) __attribute__((naked)) __attribute__((used)) __attribute__((section(".init3")));
+void wdtInitEarly(void) {
+    MCUSR = 0;
+    wdt_disable();
+}
 
 // INA260 I2C address (default)
 #define INA260_ADDR 0x40
@@ -38,6 +60,26 @@ static volatile bool serialLineReady = false;
 #define PWM_MAX 255
 #define RAMP_UP_TIME_MS 1000
 #define RAMP_DOWN_TIME_MS 1000
+
+// --- Bewegungs-Sicherheit (C1): jede blockierende Bewegung bricht ab, wenn sie
+//     zu lange dauert oder die Encoder keinen Fortschritt mehr melden. ---
+// Werte großzügig; am Prüfstand feinjustieren. MOVE_TIMEOUT_MS ist die harte
+// Obergrenze, STALL_* nur die schnellere Reaktion bei echtem Stillstand.
+#define MOVE_TIMEOUT_MS 20000UL  // Gesamt-Timeout je Bewegung (setzeX/Z, fahreStrecke)
+#define CALIB_TIMEOUT_MS 15000UL // Timeout je Referenzfahrt in setup()
+#define STALL_TIMEOUT_MS 3000UL  // kein Encoder-Fortschritt -> Abbruch
+#define STALL_MIN_DELTA 3        // Impulse, die als "Fortschritt" zählen
+
+// --- Ausbleibende Pi-Antwort (H1b): nach so vielen erfolglosen GETXY-Zyklen
+//     geht der Arduino zurück in den sicheren Wartezustand, statt blind zu fahren. ---
+#define MAX_NO_REPLY 3
+
+// Fehler-/Statusflags
+volatile bool moveFault = false;    // letzte Bewegung per Timeout/Stall abgebrochen
+bool calibOk = false;               // Referenzfahrten X und Z erfolgreich (Endschalter)
+bool calibFaultFromPi = false;      // Pi hat NOCALIB gemeldet (keine Welttransformation)
+uint8_t noReplyCount = 0;           // aufeinanderfolgende GETXY ohne Pi-Antwort
+volatile bool abortRequested = false; // MODE:MANUAL während AUTO -> Zyklus abbrechen (M4)
 
 #define RAD_DURCHMESSER_MM 96.0
 #define ENCODER_IMPULSE_UMD 4800
@@ -133,7 +175,7 @@ volatile long deltaEncoderRad = 0;
 // Maximale Länge für einen Befehl über die serielle Schnittstelle
 #define MAX_CMD_LENGTH 50
 
-#define MAX_KOORDINATEN 50
+// MAX_KOORDINATEN ist oben im KONSTANTEN-Block definiert.
 struct Zielpunkt {
     float x_mm;
     float y_mm;
@@ -462,33 +504,77 @@ void isrEncoderBrush() {
     encoderBrush++;
 }
 
-void kalibriereX() {
+bool kalibriereX() {
     debug("Kalibriere X...");
+    unsigned long tStart = millis();
+    long stallEnc = encoderX;
+    unsigned long stallMs = millis();
+    bool ok = true;
     // run until the left end switch is pressed
     while (!endPressed(END_X_L)) {
+        WDT_FEED();
         motorAnalogWrite(RPWM_X, 150);
         motorAnalogWrite(LPWM_X, 0);
         delay(5);
+        if (millis() - tStart > CALIB_TIMEOUT_MS) {
+            ok = false;
+            break;
+        }
+        if (labs(encoderX - stallEnc) >= STALL_MIN_DELTA) {
+            stallEnc = encoderX;
+            stallMs = millis();
+        } else if (millis() - stallMs > STALL_TIMEOUT_MS) {
+            ok = false;
+            break;
+        }
     }
     motorAnalogWrite(RPWM_X, 0);
     motorAnalogWrite(LPWM_X, 0);
     delay(500);
-    encoderX = 0;
-    debugln("OK.");
+    if (ok) {
+        encoderX = 0;
+        debugln("OK.");
+    } else {
+        moveFault = true;
+        debugln("X: KALIB-FEHLER");
+    }
+    return ok;
 }
-void kalibriereZ() {
+bool kalibriereZ() {
     debug("Kalibriere Z...");
+    unsigned long tStart = millis();
+    long stallEnc = encoderZ;
+    unsigned long stallMs = millis();
+    bool ok = true;
     // run until the top end switch is pressed
     while (!endPressed(END_Z_O)) {
+        WDT_FEED();
         motorAnalogWrite(RPWM_Z, 150);
         motorAnalogWrite(LPWM_Z, 0);
         delay(5);
+        if (millis() - tStart > CALIB_TIMEOUT_MS) {
+            ok = false;
+            break;
+        }
+        if (labs(encoderZ - stallEnc) >= STALL_MIN_DELTA) {
+            stallEnc = encoderZ;
+            stallMs = millis();
+        } else if (millis() - stallMs > STALL_TIMEOUT_MS) {
+            ok = false;
+            break;
+        }
     }
     motorAnalogWrite(RPWM_Z, 0);
     motorAnalogWrite(LPWM_Z, 0);
     delay(500);
-    encoderZ = 0;
-    debugln("OK.");
+    if (ok) {
+        encoderZ = 0;
+        debugln("OK.");
+    } else {
+        moveFault = true;
+        debugln("Z: KALIB-FEHLER");
+    }
+    return ok;
 }
 
 void setzeXPosition(float zielPos_mm) {
@@ -508,9 +594,29 @@ void setzeXPosition(float zielPos_mm) {
     int minPWMLast = PWM_MIN;                 // minimale PWM unter Last (abhängig von Motor/Mechanik)
     long startEncoder = encoderX;
     long lastEnc;
+    unsigned long tStart = millis();
+    long stallEnc = encoderX;
+    unsigned long stallMs = millis();
 
     while ((vorwaerts && encoderX < zielAbsolut && !endPressed(END_X_R)) ||
            (!vorwaerts && encoderX > zielAbsolut && !endPressed(END_X_L))) {
+        WDT_FEED();
+        if (checkAbort())
+            break; // MODE:MANUAL empfangen (M4)
+        // Notaus: Gesamt-Timeout oder Stillstand (C1)
+        if (millis() - tStart > MOVE_TIMEOUT_MS) {
+            moveFault = true;
+            debugln("X: TIMEOUT");
+            break;
+        }
+        if (labs(encoderX - stallEnc) >= STALL_MIN_DELTA) {
+            stallEnc = encoderX;
+            stallMs = millis();
+        } else if (millis() - stallMs > STALL_TIMEOUT_MS) {
+            moveFault = true;
+            debugln("X: STALL");
+            break;
+        }
         // Distanz vom Startpunkt und zum Ziel in Impulsen
         long distFromStart = encoderX >= startEncoder ? (encoderX - startEncoder) : (startEncoder - encoderX);
         long distToGoal = zielAbsolut >= encoderX ? (zielAbsolut - encoderX) : (encoderX - zielAbsolut);
@@ -597,9 +703,29 @@ void setzeZPosition(float zielPos_mm) {
     int minPWMLast = PWM_MIN;                   // minimale PWM unter Last (abhängig von Motor/Mechanik)
     long startEncoder = encoderZ;
     long lastEnc;
+    unsigned long tStart = millis();
+    long stallEnc = encoderZ;
+    unsigned long stallMs = millis();
 
     while ((vorwaerts && encoderZ < zielAbsolut && !endPressed(END_Z_U)) ||
            (!vorwaerts && encoderZ > zielAbsolut && !endPressed(END_Z_O))) {
+        WDT_FEED();
+        if (checkAbort())
+            break; // MODE:MANUAL empfangen (M4)
+        // Notaus: Gesamt-Timeout oder Stillstand (C1)
+        if (millis() - tStart > MOVE_TIMEOUT_MS) {
+            moveFault = true;
+            debugln("Z: TIMEOUT");
+            break;
+        }
+        if (labs(encoderZ - stallEnc) >= STALL_MIN_DELTA) {
+            stallEnc = encoderZ;
+            stallMs = millis();
+        } else if (millis() - stallMs > STALL_TIMEOUT_MS) {
+            moveFault = true;
+            debugln("Z: STALL");
+            break;
+        }
         // Distanz vom Startpunkt und zum Ziel in Impulsen
         long distFromStart = encoderZ >= startEncoder ? (encoderZ - startEncoder) : (startEncoder - encoderZ);
         long distToGoal = zielAbsolut >= encoderZ ? (zielAbsolut - encoderZ) : (encoderZ - zielAbsolut);
@@ -674,6 +800,7 @@ float getBrushRPM() {
 
     // Poll for 1000 ms. We use a small delay to avoid hammering CPU.
     while (millis() - start < 1000) {
+        WDT_FEED();
         int s = digitalRead(ENCODER_BRUSH_A);
         if (s == LOW && lastState == HIGH) {
             pulses++;
@@ -697,9 +824,14 @@ void aktiviereBuerste() {
     encoderBrush = 0;
 
     setzeZPosition(start_mm);
+    if (moveFault || abortRequested) {
+        debugln("Buerste: Abbruch");
+        return;
+    }
 
     // Bürste starten (Ramp-up)
     for (int pwm = 0; pwm <= 100; pwm += 5) {
+        WDT_FEED();
         motorAnalogWrite(PWM_BRUSH, pwm);
         delay(10);
     }
@@ -711,11 +843,20 @@ void aktiviereBuerste() {
     float next_mm = start_mm;
 
     while (next_mm < zielPos_mm) {
+        WDT_FEED();
+        if (checkAbort()) {
+            debugln("Buerste: Abbruch (MANUAL)");
+            break;
+        }
 
         next_mm += step_mm;
 
         // Bewege absolut auf next_mm (setzeZPosition behandelt Endschalter)
         setzeZPosition(next_mm);
+        if (moveFault) {
+            debugln("Buerste: Abbruch (Z-Fehler)");
+            break;
+        }
 
         // Prüfe Drehzahl (getBrushRPM pollt intern 1s)
         float rpm = getBrushRPM();
@@ -735,9 +876,16 @@ void aktiviereBuerste() {
     next_mm -= step_mm; // korrigiere aktuellen Stand
     setzeZPosition(next_mm);
 
+    // Ramp-down läuft IMMER (auch bei Abbruch): Bürste sicher anhalten.
     for (int pwm = 100; pwm >= 0; pwm -= 5) {
+        WDT_FEED();
         motorAnalogWrite(PWM_BRUSH, pwm);
         delay(10);
+    }
+    motorAnalogWrite(PWM_BRUSH, 0);
+
+    if (abortRequested || moveFault) {
+        return; // weiteres Hochfahren übernimmt der Aufrufer
     }
 
     debug("Fahre hoch...");
@@ -751,7 +899,20 @@ void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
     encoderRechts = 0;
 
     long startAvg = 0;
-    long zielImpulse = (long)strecke_mm * IMPULSE_PRO_MM - deltaEncoderRad;
+    long distImpulse = (long)strecke_mm * IMPULSE_PRO_MM;
+    // Überschwing-Übertrag aus der letzten Fahrt begrenzen (L7): er darf die neue
+    // Strecke nicht auffressen oder das Vorzeichen kippen.
+    long carry = deltaEncoderRad;
+    if (carry > distImpulse)
+        carry = distImpulse;
+    else if (carry < -distImpulse)
+        carry = -distImpulse;
+    long zielImpulse = distImpulse - carry;
+    if (zielImpulse <= 0) {
+        // Ziel bereits durch Überschwingen erreicht -> keine Fahrt.
+        deltaEncoderRad = 0;
+        return;
+    }
 
     const long MAX_RAMP_IMP = RAMP_RAD_IMPULSE; // reuse X ramp constant
     const float kSync = 2;                      // synchronization gain (unchanged)
@@ -761,13 +922,38 @@ void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
     bool rueckwaerts = (!vorLinks && !vorRechts);
     long absZielImpulse = (zielImpulse >= 0) ? zielImpulse : -zielImpulse;
 
+    unsigned long tStart = millis();
+    long stallEnc = 0;
+    unsigned long stallMs = millis();
+
     while (true) {
+        WDT_FEED();
+        if (checkAbort())
+            break; // MODE:MANUAL empfangen (M4)
+
         long absEncoderL = (encoderLinks >= 0) ? encoderLinks : -encoderLinks;
         long absEncoderR = (encoderRechts >= 0) ? encoderRechts : -encoderRechts;
 
         // Abbruch wenn beide Räder Ziel erreicht haben (Absolutwert)
         if (absEncoderL >= absZielImpulse && absEncoderR >= absZielImpulse)
             break;
+
+        // Notaus: Gesamt-Timeout oder Stillstand (C1) – verhindert Endlosfahrt
+        // bei defektem Encoder oder blockiertem Rad.
+        if (millis() - tStart > MOVE_TIMEOUT_MS) {
+            moveFault = true;
+            debugln("R: TIMEOUT");
+            break;
+        }
+        long fortschritt = absEncoderL + absEncoderR;
+        if (labs(fortschritt - stallEnc) >= STALL_MIN_DELTA) {
+            stallEnc = fortschritt;
+            stallMs = millis();
+        } else if (millis() - stallMs > STALL_TIMEOUT_MS) {
+            moveFault = true;
+            debugln("R: STALL");
+            break;
+        }
 
         long currAvg = (encoderLinks + encoderRechts) / 2;
         long absCurrAvg = (currAvg >= 0) ? currAvg : -currAvg;
@@ -845,11 +1031,60 @@ void fahreStrecke(int strecke_mm, bool vorLinks, bool vorRechts) {
     }
 }
 
+// Motoren aller Achsen sofort stoppen (Notaus).
+void stoppeAlleMotoren() {
+    motorAnalogWrite(RPWM_L, 0);
+    motorAnalogWrite(LPWM_L, 0);
+    motorAnalogWrite(RPWM_R, 0);
+    motorAnalogWrite(LPWM_R, 0);
+    motorAnalogWrite(RPWM_X, 0);
+    motorAnalogWrite(LPWM_X, 0);
+    motorAnalogWrite(RPWM_Z, 0);
+    motorAnalogWrite(LPWM_Z, 0);
+    motorAnalogWrite(PWM_BRUSH, 0);
+}
+
+// Während langer AUTO-Bewegungen aufrufen: reagiert sofort auf MODE:MANUAL vom Pi
+// (M4). Führt bewusst KEINE Bewegungen aus (sonst Rekursion mit den
+// Bewegungsfunktionen). Liefert true, sobald der Zyklus abgebrochen werden soll.
+bool checkAbort() {
+    static String abrLine = "";
+    if (readSerialLine(abrLine)) {
+        if (abrLine.indexOf("MODE:MANUAL") >= 0) {
+            currentMode = MANUAL;
+            abortRequested = true;
+        }
+        abrLine = "";
+    }
+    return abortRequested;
+}
+
+// AUTO-Zyklus wegen MODE:MANUAL abbrechen: Motoren aus, Flag löschen, return.
+// currentMode wurde bereits von checkAbort()/processSerialCommand() auf MANUAL gesetzt.
+static void beendeZyklusManuell() {
+    stoppeAlleMotoren();
+    abortRequested = false;
+    debugln("AUTO-Zyklus abgebrochen (MANUAL)");
+}
+
 void anfrageUndAbarbeiten() {
+
+    moveFault = false;      // frischer Zyklus
+    abortRequested = false; // frischer Zyklus (M4)
 
     // Setze Kamera oben in die Mitte
     setzeZPosition(10);
     setzeXPosition(MITTEX);
+    if (abortRequested) {
+        beendeZyklusManuell();
+        return;
+    }
+    if (moveFault) {
+        stoppeAlleMotoren();
+        debugln("Zyklus-Abbruch: Achsfehler beim Positionieren");
+        currentMode = WAITING_FOR_START; // sicherer Wartezustand
+        return;
+    }
 
     aktuelleY_mm = 0;
     Serial.println("GETXY");
@@ -863,19 +1098,58 @@ void anfrageUndAbarbeiten() {
     waitingForCoordinates = true;
     coordinatesComplete = false;
 
-    while (millis() - start < 60000 && !coordinatesComplete) {
+    while (millis() - start < 60000 && !coordinatesComplete &&
+           currentMode == AUTO && !abortRequested) {
+        WDT_FEED();
         sendeStatus();
-        processSerialCommand(); // zentrale Verarbeitung (inkl. XY: und DONE)
+        processSerialCommand(); // zentrale Verarbeitung (inkl. XY:, DONE, MODE:MANUAL)
 
         // Kurzes idle() spart Strom, Timer2-ISR läuft weiter
         LowPower.idle(SLEEP_15MS, ADC_OFF,
                       TIMER5_ON, TIMER4_ON, TIMER3_ON, TIMER2_ON,
                       TIMER1_ON, TIMER0_ON, SPI_OFF,
                       USART3_OFF, USART2_OFF, USART1_OFF, USART0_ON, TWI_OFF);
+        WDT_ARM(); // LowPower.idle()/WDT-ISR hat den Watchdog deaktiviert -> neu scharf
     }
 
     // Koordinatenempfang beenden
     waitingForCoordinates = false;
+
+    // MODE:MANUAL während des Wartefensters -> Zyklus abbrechen (M4).
+    if (abortRequested || currentMode != AUTO) {
+        beendeZyklusManuell();
+        return;
+    }
+
+    // Pi hat "keine Kalibrierung" gemeldet -> nicht fahren, zurück in Wartezustand.
+    if (calibFaultFromPi) {
+        calibFaultFromPi = false;
+        stoppeAlleMotoren();
+        debugln("Pi: NOCALIB -> STOP");
+        Serial.println("FAULT:NOCALIB");
+        currentMode = WAITING_FOR_START;
+        return;
+    }
+
+    // Pi hat gar nicht geantwortet (kein DONE) -> NICHT blind weiterfahren (H1b).
+    if (!coordinatesComplete) {
+        stoppeAlleMotoren();
+        noReplyCount++;
+        {
+            char tmp[48];
+            snprintf(tmp, sizeof(tmp), "Keine Pi-Antwort (%d)", noReplyCount);
+            debugln(tmp);
+        }
+        Serial.println("NOREPLY");
+        if (noReplyCount >= MAX_NO_REPLY) {
+            noReplyCount = 0;
+            debugln("Zu oft keine Antwort -> WARTE");
+            Serial.println("FAULT:NOREPLY");
+            currentMode = WAITING_FOR_START;
+        }
+        return;
+    }
+    noReplyCount = 0; // Pi hat mit DONE geantwortet
 
     {
         char tmp[64];
@@ -912,10 +1186,17 @@ void anfrageUndAbarbeiten() {
     if (zielCount == 0) {
         fahreStrecke(500, true, true); // 50 cm vorwärts für nächstes Bild
         sendeStatus();
+        if (abortRequested)
+            beendeZyklusManuell();
         return;
     }
 
     for (int i = 0; i < zielCount; i++) {
+        if (abortRequested) {
+            beendeZyklusManuell();
+            return;
+        }
+
         float zielX = ziele[i].x_mm;
         float zielY = ziele[i].y_mm;
         float deltaY = zielY - aktuelleY_mm;
@@ -931,11 +1212,36 @@ void anfrageUndAbarbeiten() {
 
         aktiviereBuerste();
         sendeStatus();
+
+        // Moduswechsel während der Bewegung -> Zyklus sofort beenden (M4).
+        if (abortRequested) {
+            beendeZyklusManuell();
+            return;
+        }
+        // Bei abgebrochener Bewegung Zyklus sofort sicher beenden (C1).
+        if (moveFault) {
+            stoppeAlleMotoren();
+            debugln("Zyklus-Abbruch: Achsfehler");
+            Serial.println("FAULT:MOVE");
+            currentMode = WAITING_FOR_START;
+            return;
+        }
     }
 
     setzeZPosition(10);              // Bürste wieder ganz hoch
     fahreStrecke(250, false, false); // für nächstes Bild 25 cm zurücksetzen
     setzeXPosition(MITTEX);
+
+    if (abortRequested) {
+        beendeZyklusManuell();
+        return;
+    }
+    if (moveFault) {
+        stoppeAlleMotoren();
+        debugln("Zyklus-Abbruch: Achsfehler (Ruecksetzen)");
+        Serial.println("FAULT:MOVE");
+        currentMode = WAITING_FOR_START;
+    }
 }
 
 // clamp-Hilfsfunktion
@@ -1027,6 +1333,7 @@ void processJoystickCommand(int x, int y) {
         }
     } else {
         for (int s = 1; s <= steps; s++) {
+            WDT_FEED();
             int interpL = lastPwmLeft + ((pwmLeft - lastPwmLeft) * s) / steps;
             int interpR = lastPwmRight + ((pwmRight - lastPwmRight) * s) / steps;
 
@@ -1164,14 +1471,17 @@ void sendeStatusJson() {
     else if (currentMode == AUTO)
         modeStr = "AUTO";
 
-    StaticJsonDocument<256> doc;
+    StaticJsonDocument<384> doc;
     doc["mode"] = modeStr;
     doc["encL"] = encoderLinks;
     doc["encR"] = encoderRechts;
     doc["encX"] = encoderX;
     doc["encZ"] = encoderZ;
+    doc["calibOk"] = calibOk;
+    doc["moveFault"] = moveFault;
+    doc["noReply"] = noReplyCount;
 
-    char buffer[255];
+    char buffer[384];
     size_t n = serializeJson(doc, buffer);
     buffer[n] = '\0';
     // If INA260 present, read registers and append values to the JSON
@@ -1242,6 +1552,14 @@ void processSerialCommand() {
                 cmdBuffer = "";
                 lineComplete = false;
                 return;
+            } else if (cmdBuffer == "NOCALIB") {
+                // Pi hat keine Welttransformation -> Wartefenster beenden, Zyklus stoppt.
+                coordinatesComplete = true;
+                calibFaultFromPi = true;
+                debugln("RCD: NOCALIB");
+                cmdBuffer = "";
+                lineComplete = false;
+                return;
             } else if (cmdBuffer.startsWith("XY:")) {
                 int kommateil = cmdBuffer.indexOf(',');
                 if (kommateil > 3 && zielCount < MAX_KOORDINATEN) {
@@ -1264,11 +1582,17 @@ void processSerialCommand() {
             currentMode = AUTO;
             debugln("RCD: AUTO");
         } else if (cmdBuffer.indexOf("MODE:MANUAL") >= 0) {
+            bool warAuto = (currentMode == AUTO);
             currentMode = MANUAL;
             debugln("RCD: MANUAL");
-            // Setze Kamera oben in die Mitte
-            setzeZPosition(10);
-            setzeXPosition(MITTEX);
+            if (warAuto)
+                abortRequested = true; // laufenden AUTO-Zyklus abbrechen (M4)
+            // Kamera in Parkposition – nur wenn kein AUTO-Zyklus abgebrochen wird
+            // (sonst würde die Fahrt sofort per checkAbort() abbrechen).
+            if (!abortRequested) {
+                setzeZPosition(10);
+                setzeXPosition(MITTEX);
+            }
         }
 
         // Format: JOYSTICK:X=-48,Y=-54[,B=3]   (optionales Button-Feld B=)
@@ -1389,11 +1713,22 @@ void setup() {
         debugln("Pro-Mini zurückgesetzt (Relais-HS aktiv)");
     }
 
-    kalibriereZ();
-    kalibriereX();
+    // Referenzfahrten. AUTO wird nur freigegeben, wenn beide sauber am
+    // Endschalter genullt haben (sonst würde ohne gültigen Nullpunkt gefahren).
+    bool zOk = kalibriereZ();
+    bool xOk = kalibriereX();
+    calibOk = (zOk && xOk);
+    if (!calibOk) {
+        stoppeAlleMotoren();
+        debugln("Referenzfahrt fehlgeschlagen - AUTO gesperrt");
+    }
+
+    // Watchdog erst NACH den (langen) Referenzfahrten scharf schalten (M7).
+    WDT_ARM();
 }
 
 void loop() {
+    WDT_FEED(); // Watchdog füttern (M7)
     processSerialCommand(); // Prüfe auf neue Kommandos
 
     sendeStatus();
@@ -1423,8 +1758,18 @@ void loop() {
             lastBlink = millis();
         }
     } else if (currentMode == AUTO) {
-        // Im Auto-Modus kontinuierlich anfragen und abarbeiten
-        anfrageUndAbarbeiten();
+        if (calibOk) {
+            // Im Auto-Modus kontinuierlich anfragen und abarbeiten
+            anfrageUndAbarbeiten();
+        } else {
+            // Ohne gültige Referenzfahrt kein AUTO-Betrieb.
+            static unsigned long lastCalibWarn = 0;
+            if (millis() - lastCalibWarn > 2000) {
+                debugln("AUTO gesperrt: keine Referenzfahrt");
+                Serial.println("FAULT:NOCALIB");
+                lastCalibWarn = millis();
+            }
+        }
     }
 
     // Kleine Pause um CPU-Last zu reduzieren

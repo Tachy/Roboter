@@ -121,10 +121,9 @@ def get_status_data():
         cpu_freq = None
 
     cpu_load = get_cpu_load()
+    bot = robot_control.get_robot()
     status = {
-        "mode": (
-            robot_control.robot.get_mode() if hasattr(robot_control, "robot") else None
-        ),
+        "mode": bot.get_mode(),
         "stream": camera.is_streaming(),
         "cpu_temp": camera.get_cpu_temperature(),
         "cpu_freq": cpu_freq,
@@ -139,9 +138,8 @@ def get_status_data():
     }
     # Joystick-Daten nur im Modus MANUAL mitsenden
     if status["mode"] == "MANUAL":
-        if hasattr(robot_control.robot, "get_joystick_status"):
-            joy = robot_control.robot.get_joystick_status()
-            status["joystick"] = joy
+        if hasattr(bot, "get_joystick_status"):
+            status["joystick"] = bot.get_joystick_status()
         else:
             status["joystick"] = {"x": 0, "y": 0}
     return status

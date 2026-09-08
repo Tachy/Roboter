@@ -148,8 +148,6 @@ _undistort_cache = {}  # {(w,h): (map1, map2)}
 _last_capture_lock = threading.Lock()
 _last_capture_bytes: bytes | None = None
 _last_capture_ts: float | None = None
-_last_capture_bytes: bytes | None = None
-_last_capture_ts: float | None = None
 
 
 def _set_last_capture_bytes(data: bytes) -> None:

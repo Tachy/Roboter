@@ -8,7 +8,6 @@ import ipaddress
 import threading
 import time
 import logging
-from . import config
 from . import config, camera, training, robot_control
 
 # Logger einrichten
@@ -28,7 +27,7 @@ on_command = None
 def _is_source_allowed(src_ip_str: str) -> bool:
     """Prüft, ob eine Absender-IP gemäß ALLOWED_UDP_SOURCES zugelassen ist.
     Erlaubt einzelne IPs und CIDR-Netze. Bei leerer Liste: alles erlaubt.
-    Fehler beim Parsen führen nicht zur Ablehnung (fail-open, wie zuvor)."""
+    Bei Parse-Fehlern wird abgelehnt (fail-closed, M6)."""
     try:
         if not getattr(config, "ALLOWED_UDP_SOURCES", None):
             return True
@@ -45,8 +44,9 @@ def _is_source_allowed(src_ip_str: str) -> bool:
             except Exception:
                 continue
         return False
-    except Exception:
-        return True
+    except Exception as e:
+        logger.warning(f"Quell-IP '{src_ip_str}' nicht prüfbar – abgelehnt: {e}")
+        return False
 
 
 _last_heartbeat = 0
@@ -114,17 +114,14 @@ def start_joystick_server():
                     )
                 # BUTTON (B=1): je nach Modus
                 if ",B=1" in command:
-                    mode = (
-                        robot_control.robot.get_mode()
-                        if hasattr(robot_control, "robot")
-                        else None
-                    )
+                    bot = robot_control.get_robot()
+                    mode = bot.get_mode()
                     if mode == "MANUAL":
                         training.save_training_image()
                     elif mode == "DISTORTION":
-                        robot_control.robot.calibration_button_pressed()
+                        bot.calibration_button_pressed()
                     elif mode == "EXTRINSIK":
-                        robot_control.robot.extrinsic_button_pressed()
+                        bot.extrinsic_button_pressed()
             except Exception as e:
                 logger.error(
                     f"Fehler beim Verarbeiten des Joystick-Befehls '{command}': {e}"
@@ -142,6 +139,12 @@ def _heartbeat_listener():
     while True:
         try:
             data, addr = sock.recvfrom(1024)
+            # Quell-IP prüfen (M3): sonst kann jeder Host den Stream aktiv halten
+            if not _is_source_allowed(addr[0]):
+                logger.warning(
+                    f"Verwerfe Heartbeat von nicht erlaubter Quelle: {addr[0]}"
+                )
+                continue
             _last_heartbeat = time.time()
             logger.debug(f"Heartbeat empfangen von {addr}")
         except Exception as e:

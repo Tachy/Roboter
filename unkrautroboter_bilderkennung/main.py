@@ -2,7 +2,7 @@
 Hauptskript zum Starten des Unkrautroboters.
 """
 
-from src.robot_control import robot
+from src.robot_control import get_robot
 
 if __name__ == "__main__":
-    robot.run()
+    get_robot().run()

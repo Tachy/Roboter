@@ -63,6 +63,43 @@ def _load_persisted_mode():
         return None
 
 
+# --- Vorschaubild-Helfer (L3: war 6x als Copy-Paste im Modul) ---
+def _to_bgr(arr):
+    """picamera2-Array (RGBA/RGB/sonstiges) nach BGR wandeln."""
+    if arr is None:
+        return None
+    if arr.ndim == 3 and arr.shape[2] == 4:
+        return cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+    if arr.ndim == 3 and arr.shape[2] == 3:
+        return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+    return arr
+
+
+def _publish_preview(bgr, text=None, target_w=320, quality=85):
+    """Verkleinertes Vorschaubild (+ optionale Statusmeldung) veröffentlichen."""
+    if bgr is None:
+        return
+    h, w = bgr.shape[:2]
+    scale = target_w / float(w)
+    preview = cv2.resize(
+        bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA
+    )
+    if text is not None:
+        try:
+            status_bus.set_message(text)
+        except Exception:
+            pass
+    camera._encode_and_store_last_capture(preview, quality=quality)
+
+
+def _capture_preview(text=None):
+    """Aktuelles Kamerabild holen und als Vorschau veröffentlichen."""
+    try:
+        _publish_preview(_to_bgr(camera.picam2.capture_array()), text=text)
+    except Exception:
+        logger.debug("Vorschau konnte nicht erzeugt werden", exc_info=True)
+
+
 class RobotControl:
     def __init__(self):
         self.mode = "AUTO"
@@ -71,6 +108,9 @@ class RobotControl:
         self.last_joystick = {"x": 0, "y": 0}
         self.last_joystick_lock = threading.Lock()
         self.calib_session = None
+        # GETXY (Bildaufnahme + YOLO) läuft in einem eigenen Thread, damit die
+        # Hauptschleife nicht bis zu YOLO_TIMEOUT_SEC blockiert (M5).
+        self._getxy_thread = None
         msg = "START"
         logger.info(f"-> Arduino: {msg}")
         self.send_command(msg)
@@ -117,28 +157,7 @@ class RobotControl:
             # Beim Wechsel in EXTRINSIK: Bannerbild in Vorschau
             try:
                 if self.mode == "EXTRINSIK" and camera.is_camera_started():
-                    arr = camera.picam2.capture_array()
-                    if arr is not None:
-                        if arr.ndim == 3 and arr.shape[2] == 4:
-                            bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-                        elif arr.ndim == 3 and arr.shape[2] == 3:
-                            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                        else:
-                            bgr = arr
-                        h, w = bgr.shape[:2]
-                        target_w = 320
-                        scale = target_w / float(w)
-                        preview = cv2.resize(
-                            bgr,
-                            (target_w, max(1, int(h * scale))),
-                            interpolation=cv2.INTER_AREA,
-                        )
-                        text = "Extrinsik: Klick zum Starten"
-                        try:
-                            status_bus.set_message(text)
-                        except Exception:
-                            pass
-                        camera._encode_and_store_last_capture(preview, quality=85)
+                    _capture_preview("Extrinsik: Klick zum Starten")
                 # Beim Wechsel in DISTORTION: Erste Phase ohne Klick starten und Status setzen
                 if self.mode == "DISTORTION":
                     # Kalibriersession anlegen
@@ -152,29 +171,8 @@ class RobotControl:
                     except Exception:
                         pass
                     # Optional: aktuelle Vorschau ohne Overlay speichern
-                    try:
-                        if camera.is_camera_started():
-                            arr = camera.picam2.capture_array()
-                            if arr is not None:
-                                if arr.ndim == 3 and arr.shape[2] == 4:
-                                    bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-                                elif arr.ndim == 3 and arr.shape[2] == 3:
-                                    bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                                else:
-                                    bgr = arr
-                                h, w = bgr.shape[:2]
-                                target_w = 320
-                                scale = target_w / float(w)
-                                preview = cv2.resize(
-                                    bgr,
-                                    (target_w, max(1, int(h * scale))),
-                                    interpolation=cv2.INTER_AREA,
-                                )
-                                camera._encode_and_store_last_capture(
-                                    preview, quality=85
-                                )
-                    except Exception:
-                        pass
+                    if camera.is_camera_started():
+                        _capture_preview()
             except Exception:
                 pass
 
@@ -196,15 +194,23 @@ class RobotControl:
 
         elif line == "GETXY":
             logger.info("<- Arduino: GETXY")
+            # Bildaufnahme + YOLO NICHT in der Hauptschleife (blockiert sonst bis
+            # YOLO_TIMEOUT_SEC). In einem Worker-Thread abarbeiten (M5).
+            if self._getxy_thread is not None and self._getxy_thread.is_alive():
+                logger.warning("[AUTO] GETXY ignoriert – vorherige Verarbeitung läuft noch.")
+                return
+            self._getxy_thread = threading.Thread(
+                target=self._handle_getxy, name="getxy-worker", daemon=True
+            )
+            self._getxy_thread.start()
 
-            # Entzerrtes Einzelbild aufnehmen und verarbeiten (immer undistortiert für GETXY)
-            filename = "frame.jpg"
-            camera.capture_image(filename, undistort=True)
-            img_path = filename
-
-            coords = yolo_detector.process_image(img_path)
-            # Falls Welttransformation verfügbar: Pixel -> Welt (mm)
-            use_world = False
+    def _handle_getxy(self):
+        """Worker: Einzelbild aufnehmen, YOLO auswerten, Koordinaten an den Arduino
+        senden. Läuft in einem eigenen Thread (siehe process_auto_mode)."""
+        try:
+            # Welttransformation (Pixel -> mm) muss vorhanden sein. Ohne sie würde der
+            # Arduino rohe Pixelwerte als Millimeter interpretieren und unkontrolliert
+            # fahren -> in diesem Fall KEINE Koordinaten senden.
             try:
                 use_world = (
                     getattr(config, "WORLD_TRANSFORM_ACTIVE", True)
@@ -212,26 +218,68 @@ class RobotControl:
                 )
             except Exception:
                 use_world = geometry.is_world_transform_ready()
+
+            if not use_world:
+                logger.error(
+                    "[AUTO] Keine Welttransformation (Homographie/Extrinsik) geladen – "
+                    "AUTO-Fahrt ohne Kalibrierung deaktiviert. Sende NOCALIB."
+                )
+                try:
+                    status_bus.set_message(
+                        "AUTO gestoppt: Kalibrierung fehlt (keine Welttransformation)"
+                    )
+                except Exception:
+                    pass
+                self.send_command("NOCALIB")
+                logger.info("-> Arduino: NOCALIB")
+                return
+
+            # Entzerrtes Einzelbild aufnehmen und verarbeiten (immer undistortiert für GETXY)
+            filename = "frame.jpg"
+            camera.capture_image(filename, undistort=True)
+            img_path = filename
+
+            coords = yolo_detector.process_image(img_path)
+
+            # Modus könnte sich während der Inferenz geändert haben
+            if self.get_mode() != "AUTO":
+                logger.info("[AUTO] Modus nicht mehr AUTO – sende keine Koordinaten.")
+                return
+
+            sent = 0
+            skipped = 0
             for x, y in coords:
-                if use_world:
-                    try:
-                        w = geometry.pixel_to_world(float(x), float(y))
-                        if w is not None:
-                            xw, yw = w
-                            msg = f"XY:{xw:.1f},{yw:.1f}"
-                        else:
-                            msg = f"XY:{x:.1f},{y:.1f}"
-                    except Exception:
-                        msg = f"XY:{x:.1f},{y:.1f}"
-                else:
-                    msg = f"XY:{x:.1f},{y:.1f}"
+                if self.get_mode() != "AUTO":
+                    logger.info("[AUTO] Moduswechsel – Koordinatenversand abgebrochen.")
+                    return
+                try:
+                    w = geometry.pixel_to_world(float(x), float(y))
+                except Exception as e:
+                    logger.warning(
+                        f"[AUTO] pixel_to_world fehlgeschlagen für ({x:.1f},{y:.1f}): {e}"
+                    )
+                    w = None
+                if w is None:
+                    # Keine gültige Welt-Umrechnung -> überspringen statt Pixel zu senden
+                    skipped += 1
+                    continue
+                xw, yw = w
+                msg = f"XY:{xw:.1f},{yw:.1f}"
                 logger.info(f"-> Arduino: {msg}")
                 self.send_command(msg)
+                sent += 1
                 time.sleep(0.05)
+
+            if skipped:
+                logger.warning(
+                    f"[AUTO] {skipped} Koordinate(n) ohne gültige Welt-Umrechnung übersprungen."
+                )
 
             # Abschlussmeldung
             self.send_command("DONE")
-            logger.info("-> Arduino: DONE")
+            logger.info(f"-> Arduino: DONE ({sent} Koordinate(n) gesendet)")
+        except Exception as e:
+            logger.exception(f"[AUTO] Fehler in GETXY-Worker: {e}")
 
     def handle_command(self, command):
         """Verarbeitet ein empfangenes Kommando."""
@@ -249,7 +297,9 @@ class RobotControl:
                     with self.last_joystick_lock:
                         self.last_joystick = {"x": x, "y": y}
             except Exception:
-                pass
+                logger.debug(
+                    f"Joystick-Kommando nicht parsebar: {command!r}", exc_info=True
+                )
         mode = self.get_mode()
         if mode == "MANUAL":
             if ",B=1" in command:
@@ -284,34 +334,8 @@ class RobotControl:
             logger.info(
                 "[Calib] Kalibriervorgang gestartet. Nächster Klick nimmt das erste Bild auf."
             )
-            # Bannerbild "Klick zum Starten" als letzte Aufnahme veröffentlichen (Größe wie "Aufnahme X/Y")
-            try:
-                arr = camera.picam2.capture_array()
-                if arr is not None:
-                    if arr.ndim == 3 and arr.shape[2] == 4:
-                        bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-                    elif arr.ndim == 3 and arr.shape[2] == 3:
-                        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                    else:
-                        bgr = arr
-                    h, w = bgr.shape[:2]
-                    target_w = 320
-                    scale = target_w / float(w)
-                    preview = cv2.resize(
-                        bgr,
-                        (target_w, max(1, int(h * scale))),
-                        interpolation=cv2.INTER_AREA,
-                    )
-                    text = "Kalibrierung: Klick zum Starten"
-                    try:
-                        status_bus.set_message(text)
-                    except Exception:
-                        pass
-                    camera._encode_and_store_last_capture(preview, quality=85)
-            except Exception:
-                pass
-            finally:
-                pass
+            # Bannerbild "Klick zum Starten" als letzte Aufnahme veröffentlichen
+            _capture_preview("Kalibrierung: Klick zum Starten")
             return
         # Ab hier: Session existiert -> Snapshots sammeln
         ok, counts = self.calib_session.capture_snapshot()
@@ -324,34 +348,8 @@ class RobotControl:
             try:
                 out_file, err = self.calib_session.finalize()
                 logger.info(f"[Calib] gespeichert: {out_file} (reproj_err={err:.4f})")
-                # Abschlussbanner zeigen (Größe wie "Aufnahme X/Y")
-                try:
-                    arr = camera.picam2.capture_array()
-                    if arr is not None:
-                        if arr.ndim == 3 and arr.shape[2] == 4:
-                            bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-                        elif arr.ndim == 3 and arr.shape[2] == 3:
-                            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                        else:
-                            bgr = arr
-                        h, w = bgr.shape[:2]
-                        target_w = 320
-                        scale = target_w / float(w)
-                        preview = cv2.resize(
-                            bgr,
-                            (target_w, max(1, int(h * scale))),
-                            interpolation=cv2.INTER_AREA,
-                        )
-                        text2 = "Kalibrierung abgeschlossen"
-                        try:
-                            status_bus.set_message(text2)
-                        except Exception:
-                            pass
-                        camera._encode_and_store_last_capture(preview, quality=85)
-                except Exception:
-                    pass
-                finally:
-                    pass
+                # Abschlussbanner zeigen
+                _capture_preview("Kalibrierung abgeschlossen")
             except Exception as e:
                 logger.error(f"[Calib] Fehler bei Finalisierung: {e}")
             finally:
@@ -385,44 +383,14 @@ class RobotControl:
                 newK = newK.astype(float)
         except Exception:
             # Fehlerbanner: keine K/D
-            try:
-                arr = camera.picam2.capture_array()
-                if arr is not None:
-                    if arr.ndim == 3 and arr.shape[2] == 4:
-                        bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-                    elif arr.ndim == 3 and arr.shape[2] == 3:
-                        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                    else:
-                        bgr = arr
-                    h, w = bgr.shape[:2]
-                    target_w = 320
-                    scale = target_w / float(w)
-                    preview = cv2.resize(
-                        bgr,
-                        (target_w, max(1, int(h * scale))),
-                        interpolation=cv2.INTER_AREA,
-                    )
-                    text3 = "Extrinsik: Keine K/D gefunden"
-                    try:
-                        status_bus.set_message(text3)
-                    except Exception:
-                        pass
-                    camera._encode_and_store_last_capture(preview, quality=85)
-            except Exception:
-                pass
+            _capture_preview("Extrinsik: Keine K/D gefunden")
             return
 
         # Bild holen
         try:
-            arr = camera.picam2.capture_array()
-            if arr is None:
+            bgr = _to_bgr(camera.picam2.capture_array())
+            if bgr is None:
                 raise RuntimeError("Kein Kamerabild verfügbar.")
-            if arr.ndim == 3 and arr.shape[2] == 4:
-                bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-            elif arr.ndim == 3 and arr.shape[2] == 3:
-                bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-            else:
-                bgr = arr
         except Exception:
             return
 
@@ -431,22 +399,8 @@ class RobotControl:
             bgr, K, D, newK=newK
         )
 
-        # Preview/Banner schreiben
-        try:
-            h, w = draw.shape[:2]
-            target_w = 320
-            scale = target_w / float(w)
-            preview = cv2.resize(
-                draw, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA
-            )
-            color = (0, 255, 0) if ok else (0, 0, 255)
-            try:
-                status_bus.set_message(text)
-            except Exception:
-                pass
-            camera._encode_and_store_last_capture(preview, quality=85)
-        except Exception:
-            pass
+        # Preview/Banner schreiben (draw ist bereits BGR)
+        _publish_preview(draw, text=text)
 
     def get_joystick_status(self):
         with self.last_joystick_lock:
@@ -623,5 +577,14 @@ class RobotControl:
                 logger.error(f"Fehler beim Reopen der seriellen Schnittstelle: {e}")
 
 
-# Globale Instanz für den Zugriff aus anderen Modulen
-robot = RobotControl()
+# Singleton – wird erst bei Bedarf erzeugt (L1: kein Hardware-/Serial-Zugriff
+# beim reinen Importieren des Moduls).
+robot = None
+
+
+def get_robot() -> "RobotControl":
+    """Liefert die (bei Bedarf erzeugte) globale RobotControl-Instanz."""
+    global robot
+    if robot is None:
+        robot = RobotControl()
+    return robot
