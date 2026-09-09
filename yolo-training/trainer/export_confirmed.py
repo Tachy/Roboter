@@ -101,7 +101,7 @@ def export_tag(tag: str | None, out: Path, exclude_tags=("holdout",)) -> dict:
         n_neg += not rows
 
     (out / "data.yaml").write_text(
-        "path: .\ntrain: images\nval: images\n"
+        f"path: {out.resolve()}\ntrain: images\nval: images\n"
         f"nc: {len(common.CLASSES)}\nnames:\n"
         + "".join(f"  {i}: {n}\n" for i, n in enumerate(common.CLASSES))
     )

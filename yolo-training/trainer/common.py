@@ -25,11 +25,11 @@ INBOX = LIGHTLY_DIR / "inbox" / "unkraut"
 STATE_DIR = LIGHTLY_DIR / "state"
 DB_FILE = LIGHTLY_DIR / "studio" / "lightly_studio.db"
 
-DATASET_NAME = "unkraut"
+DATASET_NAME = os.environ.get("LS_DATASET", "unkraut")
 CLASSES = ["unkraut", "moos"]          # class id 0, 1 — order is authoritative
 
 LS_BASE = os.environ.get("LS_BASE", "http://127.0.0.1:8001")
-STUDIO_UNIT = "lightly-studio.service"
+STUDIO_UNIT = os.environ.get("STUDIO_UNIT", "lightly-studio.service")
 
 CURRENT_MODEL = LIGHTLY_DIR / "models" / "current" / "best.pt"
 

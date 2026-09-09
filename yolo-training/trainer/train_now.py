@@ -158,6 +158,8 @@ def main() -> int:
     ap.add_argument("--imgsz", type=int, default=1280)
     ap.add_argument("--floor", type=float, default=0.25)
     ap.add_argument("--skip-export", action="store_true")
+    ap.add_argument("--no-gate", action="store_true",
+                    help="promote regardless of the holdout gate (still records reasons)")
     a = ap.parse_args()
     ts = dt.datetime.now().strftime("%Y%m%d%H%M%S")
 
@@ -202,9 +204,13 @@ def main() -> int:
             cur_m = val_metrics(common.CURRENT_MODEL, eval_data, a.imgsz)
 
         ok, reasons = gate(cand_m, cur_m, a.floor)
+        if a.no_gate and not ok:
+            print(f"train_now: --no-gate: promoting despite {reasons}")
+            ok = True
 
         metrics = {
-            "ts": ts, "gate": "pass" if ok else "reject", "reasons": reasons,
+            "ts": ts, "gate": "pass" if ok else "reject",
+            "gate_bypassed": bool(a.no_gate), "reasons": reasons,
             "candidate": cand_m, "current": cur_m,
             "eval_on": "holdout" if holdout_yaml.exists() else "val_split",
             "dataset": {"train": n_train, "val": n_val,
