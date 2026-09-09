@@ -10,7 +10,8 @@ python = "^3.9"
 picamera2 = "*"          # Systempaket auf dem Pi (apt), kein PyPI-Pin sinnvoll
 pillow = ">=10.0"
 pyserial = ">=3.5"
-ultralytics = ">=8.0.200"
+ultralytics = ">=8.4,<8.5"   # YOLO26-fähig; NCNN-Inferenz auf ARM64 gefixt (>= 8.4.x)
+ncnn = "*"               # NCNN-Runtime (YOLO_RUNTIME="ncnn"); aarch64-Wheel auf dem Pi
 numpy = ">=1.24"         # direkt genutzt (geometry, yolo_detector, camera)
 websockets = ">=11.0"    # status_ws_server – vorher nicht deklariert
 

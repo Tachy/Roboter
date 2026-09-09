@@ -55,6 +55,9 @@ MODEL_DIR = "./model/"                        # Zielverzeichnis (best.pt, best_n
 YOLO_NCNN_DIR = "./model/best_ncnn_model"     # genutzt bei YOLO_RUNTIME == "ncnn"
 YOLO_RUNTIME = "pt"                           # "pt" | "ncnn" | "onnx"
 YOLO_EXPECTED_CLASSES = ["unkraut", "moos"]   # Reihenfolge maßgeblich; OTA weist bei Abweichung ab
+# Umstieg auf YOLO26s: sobald ein echtes YOLO26-Modell per OTA drauf ist, hier
+# YOLO_RUNTIME = "ncnn" und YOLO_IMG_SIZE = 1280 setzen (Pi 4B NCNN FP16 @1280 ~4,5 s,
+# geprüft mit ultralytics 8.4.146). Der OTA-Tar muss dann imgsz=1280 im Manifest haben.
 
 # GPIO-Pin (BCM) an der Raspberry Pi, der mit dem RESET-Pin des Mega verbunden ist.
 # Wenn None, wird kein Reset per GPIO durchgeführt. Hinweis: RESET ist aktiv LOW.

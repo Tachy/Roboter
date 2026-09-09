@@ -69,11 +69,12 @@ python main.py          # run directly
 # or as systemd service: sudo systemctl start roboter.service
 ```
 
-**Dependencies** (managed via Poetry):
+**Dependencies** (managed via Poetry; `poetry.lock` is not in git):
 ```bash
 cd unkrautroboter_bilderkennung
 poetry install
 ```
+The Pi's `pyvenv` currently has `ultralytics 8.4.146` + `ncnn` + `torch 2.8.0+cpu` (bumped in place via `pyvenv/bin/pip install`; `pyproject.toml` reflects the intent — run `poetry lock && poetry install` to reconcile if needed).
 
 **Joystick client** (run on PC with USB gamepad):
 ```bash
@@ -116,7 +117,10 @@ The Arduino's `anfrageUndAbarbeiten()` function is the AUTO mode cycle: send `GE
 
 ```
 Camera (picamera2, 1280×720)
-  → YOLO inference (model/best.pt)     ← YOLOv8m @640 today; migrating to YOLO26s (NCNN FP16) @1280, see plan Phase 6
+  → YOLO inference (model/best.pt)     ← YOLOv8m @640 today (config.YOLO_RUNTIME="pt"); Pi env is on
+                                        ultralytics 8.4.146 + ncnn, ready for YOLO26s NCNN FP16 @1280
+                                        (~4.5 s on the Pi 4B, verified) — flip YOLO_RUNTIME/YOLO_IMG_SIZE
+                                        once a real YOLO26 model lands via the model OTA
   → pixel (x,y)
   → geometry.pixel_to_world()     ← prefers ground_homography.npz; falls back to extrinsics.npz + ray-plane
   → (x_mm, y_mm) in robot frame   ← offset by WORLD_OFFSET_XY_MM from config
