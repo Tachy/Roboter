@@ -1,3 +1,6 @@
+# Claude Code – persönliche Overrides bleiben lokal
+.claude/settings.local.json
+
 # Globale Gitignore für das Projekt
 # Python- und venv-typische Regeln
 __pycache__/

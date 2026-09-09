@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/bin/deploy-slash-hook.sh\"",
+            "timeout": 300,
+            "statusMessage": "/deploy-*"
+          }
+        ]
+      }
+    ]
+  }
+}

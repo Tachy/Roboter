@@ -16,6 +16,46 @@ A solar-powered weed-removal robot (Unkrautroboter) that detects weeds growing i
 | Motor control | Arduino Mega 2560 | C++ (Arduino) | `unkrautroboter_motorsteuerung/` |
 | Energy management | Arduino Pro Mini 5V | C++ (Arduino) | `unkrautroboter_energiemanagement/` |
 
+## Robot Access (SSH)
+
+The Raspberry Pi is reachable via SSH with a pre-installed key (no password prompt):
+
+```bash
+ssh admin@192.168.179.252
+```
+
+- Host: `192.168.179.252` (LAN), hostname `unkrautroboter`, Raspberry Pi OS Bookworm (aarch64, kernel 6.12).
+- User: `admin`, passwordless `sudo`.
+- The `unkrautroboter_bilderkennung` code is deployed directly in `/home/admin` (`main.py`, `src/`, `calibration/`, `model/`, `state/`, `upload/`, ...).
+- Runs as systemd service `roboter.service` (`sudo systemctl status|restart roboter.service`).
+
+### Web Dashboard Server
+
+The operator UI `unkrautroboter.html` is served by Apache on a separate host (home server, CentOS 7):
+
+```bash
+ssh -p 29876 apache@192.168.179.4     # pre-installed key, no password; no passwordless sudo
+```
+
+- Document root: `/var/www/html` (shared with many other home-automation pages). Relevant files: `unkrautroboter.html`, `css/style.css`, `js/*.js` (`config.js`, `mode.js`, `stream.js`, `status.js`, `ws.js`, `heartbeat.js`, `joypad.js`, `reset.js`).
+- Reachable at `http://192.168.179.4/unkrautroboter.html` (HTTP 200 verified).
+- `js/config.js` points the browser back at the Pi: `HOST=192.168.179.252`, `HTTP_PORT=8080` (MJPEG `/stream`, `/last_capture.jpg`), `WS_PORT=8765` (WebSocket). Mode/joystick control still goes over the Pi's UDP ports (5005/5006/5007).
+- Source of truth for the dashboard is `unkrautroboter_bilderkennung/monitoring_webserver/` in this repo. Deploy with `bin/deploy-webserver.sh` — a plain scp copy of `unkrautroboter.html`, `send_udp.php`, `css/`, `js/` into the doc root (no delete, no chmod; other doc-root files untouched). `--dry-run` shows what it would copy.
+- Inside Claude Code, typing `/deploy-webserver [flags]` runs that script directly and spends no tokens: a `UserPromptSubmit` hook (`.claude/settings.json` → `bin/deploy-slash-hook.sh`) intercepts the command, runs the deploy, and blocks the prompt from reaching the model. The same generic hook also handles `/deploy-arduino` (allow-list in the hook script). The `.claude/commands/deploy-*.md` files only provide autocomplete + a fallback.
+
+### Training Platform (RTX 4090)
+
+Separate GPU box for the planned training software (labeling workflow, YOLO/perception model training — not yet built):
+
+```bash
+ssh -p 29876 tachy@192.168.179.17     # pre-installed key, no password; SSH on port 29876 (not 22); no passwordless sudo
+```
+
+- Host: `gamepc-4090-linux`, Ubuntu 26.04 LTS, kernel 7.0, user `tachy` (home `/home/tachy`).
+- GPU: NVIDIA GeForce RTX 4090, 24 GB, driver 595.84, CUDA 13.2 (driver runtime only — no CUDA toolkit / `nvcc`).
+- Bare system so far: `python3` 3.14 only, **no** `pip3` / `torch` / conda / uv / poetry / docker installed yet.
+- Disk: ~1.9 TB root, ~1.4 TB free.
+
 ## Running the Raspberry Pi App
 
 ```bash
@@ -41,7 +81,11 @@ python joystick_steuerung.py
 
 The `.vscode/arduino.json` configures the workspace for the Arduino extension in VS Code. Board: `arduino.avr.mega`. Build output goes to `unkrautroboter_motorsteuerung/build/arduino.avr.mega/`.
 
-**OTA firmware upload** (while Pi runs, robot in MANUAL mode): place a `.hex` file in `unkrautroboter_bilderkennung/upload/` — the Pi auto-flashes it to the Mega via avrdude and moves it to `.uploaded` or `.failed`.
+**Build + deploy firmware:** `bin/deploy-arduino.sh` compiles with `arduino-cli` (FQBN `arduino:avr:mega:cpu=atmega2560`, read from `.vscode/arduino.json`) into `unkrautroboter_motorsteuerung/build/arduino.avr.mega/`, then scp's the **application-only** `unkrautroboter_motorsteuerung.ino.hex` to `admin@192.168.179.252:/home/admin/upload/`. `--dry-run` = compile only. Needs `arduino-cli` (auto-found in the bundled Arduino IDE) and the `arduino:avr` core. Inside Claude Code: `/deploy-arduino [--dry-run]` runs it token-free via the same hook as `/deploy-webserver`.
+
+**No bootloader in the image:** the Pi flashes with `avrdude -c wiring` over `/dev/serial0` (`robot_control.py::_flash_hex_to_mega`), which drives the ATmega2560's resident STK500v2 bootloader — so ship `*.ino.hex`, never `*.ino.with_bootloader.hex`. Confirmed against the last good `/home/admin/upload/*.ino.hex.uploaded`: byte-identical to the app-only build, highest flash address ~0x8960, no `:02000004` records.
+
+**OTA firmware upload** (while Pi runs, robot in MANUAL mode): a `.hex` in `/home/admin/upload/` on the Pi — the Pi auto-flashes it to the Mega via avrdude and renames it to `.uploaded` or `.failed`. The scan only runs in MANUAL mode.
 
 ## Architecture: Raspberry Pi ↔ Arduino MEGA Serial Protocol
 
