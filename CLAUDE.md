@@ -28,6 +28,7 @@ ssh admin@192.168.179.252
 - User: `admin`, passwordless `sudo`.
 - The `unkrautroboter_bilderkennung` code is deployed directly in `/home/admin` (`main.py`, `src/`, `calibration/`, `model/`, `state/`, `upload/`, ...).
 - Runs as systemd service `roboter.service` (`sudo systemctl status|restart roboter.service`).
+- Deploy the Pi software with `bin/deploy-pi4.sh` — scp of the git-tracked `main.py` + `src/` only (nothing else in `unkrautroboter_bilderkennung/` goes on the Pi); systemd unit is managed by hand, not touched. `--dry-run` lists the files. Inside Claude Code: `/deploy-pi4 [--dry-run]` runs it token-free via the same hook as `/deploy-webserver`.
 
 ### Web Dashboard Server
 

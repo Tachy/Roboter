@@ -9,12 +9,13 @@
 #
 #   /deploy-webserver [args]  -> bin/deploy-webserver.sh
 #   /deploy-arduino   [args]  -> bin/deploy-arduino.sh
+#   /deploy-pi4       [args]  -> bin/deploy-pi4.sh
 #
 # Wired in .claude/settings.json -> hooks.UserPromptSubmit. Claude Code
 # passes a JSON object on stdin whose "prompt" field holds the user's text.
 set -uo pipefail
 
-ALLOWED=" webserver arduino "   # space-delimited allow-list
+ALLOWED=" webserver arduino pi4 "   # space-delimited allow-list
 
 # CLAUDE_PROJECT_DIR may arrive as a Windows path; normalise for Git Bash.
 root="${CLAUDE_PROJECT_DIR:-}"

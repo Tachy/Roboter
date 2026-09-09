@@ -1,0 +1,25 @@
+[Unit]
+Description=Roboter Python Service (poetry + venv)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=admin
+WorkingDirectory=/home/admin
+
+Environment=PYTHONUNBUFFERED=1
+Environment=POETRY_VIRTUALENVS_CREATE=false
+
+ExecStartPre=/usr/bin/mkdir -p /var/log/roboter
+ExecStartPre=/usr/bin/touch /var/log/roboter/roboter.log
+ExecStartPre=/usr/bin/chown admin:admin /var/log/roboter /var/log/roboter/roboter.log
+
+ExecStart=/bin/bash -lc 'source /home/admin/pyvenv/bin/activate && poetry run python main.py >> /var/log/roboter/roboter.log 2>&1'
+
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+
