@@ -52,6 +52,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $post = ['token' => CONTROL_TOKEN, 'deploy' => '1'];
         if (!empty($_POST['skip_export'])) $post['skip_export'] = '1';
+        // one-off model-family switch (e.g. "yolo26s.pt"); shape-checked, .17 re-checks
+        if (!empty($_POST['base']) && preg_match('/^[A-Za-z0-9._\/-]{1,80}$/', $_POST['base'])) {
+            $post['base'] = $_POST['base'];
+        }
         [$code, $body, $err] = forward('/train', $post, 15);
     }
     if ($code === 200) { echo json_encode(['ok' => true, 'reply' => $body]); exit; }

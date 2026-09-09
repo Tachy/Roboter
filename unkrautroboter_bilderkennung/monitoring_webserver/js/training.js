@@ -6,6 +6,7 @@
   const logEl = document.getElementById('training-log');
   const btn = document.getElementById('training-btn');
   const skipEl = document.getElementById('training-skip');
+  const baseEl = document.getElementById('training-base');
 
   let running = false;
 
@@ -41,7 +42,12 @@
 
   btn.addEventListener('click', async () => {
     if (running) return;
-    if (!confirm('Modell neu trainieren und bei bestandenem Gate an den Roboter deployen?')) return;
+    const switching = baseEl && baseEl.checked;
+    const msg = switching
+      ? 'ERSTUMSTIEG: Modell komplett neu von YOLO26s aufsetzen (verwirft die v8m-Basis) '
+        + 'und bei bestandenem Gate an den Roboter deployen?'
+      : 'Modell neu trainieren und bei bestandenem Gate an den Roboter deployen?';
+    if (!confirm(msg)) return;
     btn.disabled = true;
     statusEl.textContent = 'starte …';
     const body = new URLSearchParams({
@@ -49,6 +55,7 @@
       token: (typeof CONFIG !== 'undefined' && CONFIG.CONTROL_TOKEN) || '',
     });
     if (skipEl && skipEl.checked) body.set('skip_export', '1');
+    if (switching) body.set('base', 'yolo26s.pt');
     try {
       const r = await fetch('train.php', {
         method: 'POST',

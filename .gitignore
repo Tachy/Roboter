@@ -38,6 +38,8 @@ yolo-training/dataset.yaml
 # --- Labeling-/Trainings-Pipeline (Plan adaptive-orbiting-fountain) ---
 # Modell-Binaries: nicht mehr in Git, kommen via bin/deploy-model.sh auf den Pi
 unkrautroboter_bilderkennung/model/best.pt
+unkrautroboter_bilderkennung/model/best.pt.*
+unkrautroboter_bilderkennung/model/metrics.json
 unkrautroboter_bilderkennung/model/*.onnx
 unkrautroboter_bilderkennung/model/*.ncnn*
 unkrautroboter_bilderkennung/model/*_ncnn_model/

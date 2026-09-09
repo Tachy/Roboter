@@ -16,6 +16,7 @@ Pipeline:
 
 Usage:  ~/lightly/venv-trainer/bin/python train_now.py
         [--epochs 120] [--imgsz 1280] [--floor 0.25] [--skip-export]
+        [--base yolo26s.pt]   # force the fine-tune start point (one-off YOLO26 switch)
 """
 from __future__ import annotations
 
@@ -160,6 +161,11 @@ def main() -> int:
     ap.add_argument("--skip-export", action="store_true")
     ap.add_argument("--no-gate", action="store_true",
                     help="promote regardless of the holdout gate (still records reasons)")
+    ap.add_argument("--base", default="",
+                    help="fine-tune start weights: a path, or a bare ultralytics name "
+                         "like 'yolo26s.pt' (auto-downloaded). Overrides models/current. "
+                         "Use once to switch the family (e.g. v8m -> YOLO26s); the gate "
+                         "baseline stays models/current.")
     a = ap.parse_args()
     ts = dt.datetime.now().strftime("%Y%m%d%H%M%S")
 
@@ -177,8 +183,14 @@ def main() -> int:
         print("train_now: no training images — abort")
         return 1
 
-    base = common.CURRENT_MODEL if common.CURRENT_MODEL.exists() else Path("yolo26s.pt")
-    print(f"train_now: base weights = {base}")
+    if a.base:
+        cand_base = Path(a.base).expanduser()
+        # a bare name (no dir part, not on disk) is an ultralytics id -> let YOLO fetch it
+        base = cand_base if (cand_base.exists() or cand_base.parent != Path(".")) else Path(a.base)
+        print(f"train_now: base weights = {base}  (forced via --base)")
+    else:
+        base = common.CURRENT_MODEL if common.CURRENT_MODEL.exists() else Path("yolo26s.pt")
+        print(f"train_now: base weights = {base}")
 
     from ultralytics import YOLO
     import ultralytics

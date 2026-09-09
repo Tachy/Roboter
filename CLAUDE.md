@@ -122,10 +122,12 @@ The Arduino's `anfrageUndAbarbeiten()` function is the AUTO mode cycle: send `GE
 
 ```
 Camera (picamera2, 1280×720)
-  → YOLO inference (model/best.pt)     ← YOLOv8m @640 today (config.YOLO_RUNTIME="pt"); Pi env is on
-                                        ultralytics 8.4.146 + ncnn, ready for YOLO26s NCNN FP16 @1280
-                                        (~4.5 s on the Pi 4B, verified) — flip YOLO_RUNTIME/YOLO_IMG_SIZE
-                                        once a real YOLO26 model lands via the model OTA
+  → YOLO inference                     ← YOLO26s, NCNN FP16, imgsz 1280 (config.YOLO_RUNTIME="ncnn",
+                                        model/best_ncnn_model/), ~6-8 s on the Pi 4B, ultralytics 8.4.146.
+                                        The live model is a BOOTSTRAP trained on synthetic images
+                                        (family/pipeline switch only) — replaced by the first real-data
+                                        run via the model OTA. v8m fallback: model/best.pt.v8m +
+                                        YOLO_RUNTIME="pt"/YOLO_IMG_SIZE=640.
   → pixel (x,y)
   → geometry.pixel_to_world()     ← prefers ground_homography.npz; falls back to extrinsics.npz + ray-plane
   → (x_mm, y_mm) in robot frame   ← offset by WORLD_OFFSET_XY_MM from config

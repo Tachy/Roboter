@@ -36,7 +36,7 @@ YOLO_MODEL_PATH = "./model/best.pt"  # z. B. "best.pt"
 
 # Inferenz-Parameter (Subprozess mit Timeout)
 YOLO_TIMEOUT_SEC = 40
-YOLO_IMG_SIZE = 640  # Netzgröße (h, w); rechteckig für 720p→736x1280 mit wenig Padding
+YOLO_IMG_SIZE = 1280  # Netzgröße; 720p wird auf 1280x736 letterboxed (YOLO26s NCNN FP16)
 YOLO_CONF = 0.25  # Konfidenzschwelle
 YOLO_IOU = 0.45  # IoU-Schwelle
 
@@ -53,11 +53,13 @@ UPLOAD_DIR = "./upload/"
 MODEL_UPLOAD_DIR = "./model_upload/"          # Inbox für Modell-Tars
 MODEL_DIR = "./model/"                        # Zielverzeichnis (best.pt, best_ncnn_model/, ...)
 YOLO_NCNN_DIR = "./model/best_ncnn_model"     # genutzt bei YOLO_RUNTIME == "ncnn"
-YOLO_RUNTIME = "pt"                           # "pt" | "ncnn" | "onnx"
+YOLO_RUNTIME = "ncnn"                         # "pt" | "ncnn" | "onnx"
 YOLO_EXPECTED_CLASSES = ["unkraut", "moos"]   # Reihenfolge maßgeblich; OTA weist bei Abweichung ab
-# Umstieg auf YOLO26s: sobald ein echtes YOLO26-Modell per OTA drauf ist, hier
-# YOLO_RUNTIME = "ncnn" und YOLO_IMG_SIZE = 1280 setzen (Pi 4B NCNN FP16 @1280 ~4,5 s,
-# geprüft mit ultralytics 8.4.146). Der OTA-Tar muss dann imgsz=1280 im Manifest haben.
+# Läuft auf YOLO26s NCNN FP16 @ imgsz 1280 (Pi 4B ~5-8 s, ultralytics 8.4.146).
+# Das aktuelle Modell ist ein Bootstrap auf Fake-Bildern (nur Architektur-/Pipeline-
+# Umstieg) – wird beim ersten Echtdaten-Lauf über die Modell-OTA ersetzt.
+# Zurück auf v8m im Notfall: YOLO_RUNTIME="pt", YOLO_IMG_SIZE=640,
+# cp model/best.pt.v8m model/best.pt.
 
 # GPIO-Pin (BCM) an der Raspberry Pi, der mit dem RESET-Pin des Mega verbunden ist.
 # Wenn None, wird kein Reset per GPIO durchgeführt. Hinweis: RESET ist aktiv LOW.

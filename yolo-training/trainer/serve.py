@@ -18,6 +18,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -36,6 +37,10 @@ CURRENT = LIGHTLY_DIR / "models" / "current"
 HOST = os.environ.get("TRAINER_UI_HOST", "0.0.0.0")
 PORT = int(os.environ.get("TRAINER_UI_PORT", "8090"))
 TOKEN = os.environ.get("TRAINER_TOKEN", "")
+
+# --base is passed straight to train_now.py as a subprocess arg (no shell), but keep
+# it to an obvious shape anyway: a bare ultralytics id or a relative path fragment.
+_BASE_RE = re.compile(r"^[A-Za-z0-9._/-]{1,80}$")
 
 _lock = threading.Lock()
 _state = {"running": False, "phase": "idle", "model_ts": None, "gate": None,
@@ -67,15 +72,18 @@ def _newest_metrics() -> dict:
     return {}
 
 
-def _worker(deploy: bool, skip_export: bool):
+def _worker(deploy: bool, skip_export: bool, base: str = ""):
     LOG.parent.mkdir(parents=True, exist_ok=True)
-    LOG.write_text(f"=== {time.strftime('%F %T')}  train (deploy={deploy}) ===\n")
+    LOG.write_text(f"=== {time.strftime('%F %T')}  train (deploy={deploy}"
+                   f"{', base=' + base if base else ''}) ===\n")
     with _lock:
         _state.update(running=True, phase="train", deployed=False, rc=None,
                       gate=None, cand_map=None, cur_map=None, model_ts=None)
     args = [str(TRAINER_PY), str(TRAIN_NOW)]
     if skip_export:
         args.append("--skip-export")
+    if base:
+        args += ["--base", base]
     with open(LOG, "a", buffering=1) as f:
         rc = subprocess.run(args, stdout=f, stderr=subprocess.STDOUT,
                             cwd=str(LIGHTLY_DIR)).returncode
@@ -117,7 +125,7 @@ def _deploy_only():
         _state.update(running=False, phase="idle", deployed=(drc == 0))
 
 
-def start(kind: str, deploy: bool, skip_export: bool) -> bool:
+def start(kind: str, deploy: bool, skip_export: bool, base: str = "") -> bool:
     with _lock:
         if _state["running"]:
             return False
@@ -125,7 +133,8 @@ def start(kind: str, deploy: bool, skip_export: bool) -> bool:
     if kind == "deploy":
         threading.Thread(target=_deploy_only, daemon=True).start()
     else:
-        threading.Thread(target=_worker, args=(deploy, skip_export), daemon=True).start()
+        threading.Thread(target=_worker, args=(deploy, skip_export, base),
+                         daemon=True).start()
     return True
 
 
@@ -143,6 +152,7 @@ pre{{background:#111;color:#ddd;padding:1rem;overflow:auto;max-height:65vh;white
  <input type=hidden name=deploy value=1>
  <button {dis}>Trainieren &amp; deployen</button>
  <label style="margin-left:1rem"><input type=checkbox name=skip_export> skip export</label>
+ <label style="margin-left:1rem"><input type=checkbox name=base value=yolo26s.pt> Basis: YOLO26s (Erstumstieg)</label>
  <span style="margin-left:1rem;color:#888">Token nötig – Aufruf normalerweise über das .4-Dashboard</span>
 </form>
 <h3>Log</h3><pre>{log}</pre>"""
@@ -196,9 +206,13 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/deploy":
             ok = start("deploy", True, False)
         else:
+            base = params.get("base", [""])[0].strip()
+            if base and not _BASE_RE.match(base):
+                return self._send(400, b"bad base")
             ok = start("train",
                        params.get("deploy", ["0"])[0] in ("1", "true", "on"),
-                       params.get("skip_export", [""])[0] in ("1", "true", "on"))
+                       params.get("skip_export", [""])[0] in ("1", "true", "on"),
+                       base)
         body = b"ok" if ok else b"busy"
         wants_html = "text/html" in self.headers.get("accept", "")
         self.send_response(303 if wants_html else 200)
