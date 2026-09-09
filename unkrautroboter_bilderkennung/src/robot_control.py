@@ -449,6 +449,13 @@ class RobotControl:
                 except Exception as e:
                     logger.error(f"Fehler beim Scan des Upload-Verzeichnisses: {e}")
 
+                # Check for model uploads (model_<ts>.tar) in MANUAL mode
+                try:
+                    if self.get_mode() == "MANUAL":
+                        self._check_model_upload()
+                except Exception as e:
+                    logger.error(f"Fehler beim Scan des Modell-Upload-Verzeichnisses: {e}")
+
                 self.process_auto_mode()
                 time.sleep(0.1)
 
@@ -575,6 +582,152 @@ class RobotControl:
                 time.sleep(1)
             except Exception as e:
                 logger.error(f"Fehler beim Reopen der seriellen Schnittstelle: {e}")
+
+    # ------------------------------------------------------------------ #
+    # Model OTA – mirrors the .hex firmware flow: drop model_<ts>.tar in
+    # config.MODEL_UPLOAD_DIR, robot validates + atomically swaps in MANUAL.
+    # ------------------------------------------------------------------ #
+    def _check_model_upload(self) -> None:
+        import json
+        import hashlib
+        import tarfile
+
+        up = Path(config.MODEL_UPLOAD_DIR).resolve()
+        if not up.exists():
+            return
+        tars = sorted(p for p in up.iterdir() if p.suffix.lower() == ".tar")
+        if not tars:
+            return
+        tar_path = tars[0]
+        # skip a file that is still being written (mtime not settled)
+        try:
+            if time.time() - tar_path.stat().st_mtime < 3.0:
+                return
+        except OSError:
+            return
+
+        # don't swap while an AUTO inference worker is running
+        t = getattr(self, "_getxy_thread", None)
+        if t is not None and t.is_alive():
+            logger.info("Modell-Upload: GETXY-Worker aktiv, verschiebe Swap")
+            return
+
+        logger.info(f"Modell-Upload gefunden: {tar_path}")
+        staging = up / f".staging_{os.getpid()}"
+        model_dir = Path(config.MODEL_DIR).resolve()
+        ok = False
+        try:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+            staging.mkdir(parents=True)
+            with tarfile.open(tar_path) as tf:
+                names = tf.getnames()
+                if any(n.startswith("/") or ".." in Path(n).parts for n in names):
+                    raise ValueError("unsicherer Pfad im Tar")
+                tf.extractall(staging)
+
+            man = json.loads((staging / "manifest.json").read_text())
+            if list(man.get("classes", [])) != list(config.YOLO_EXPECTED_CLASSES):
+                raise ValueError(f"Klassen != erwartet: {man.get('classes')}")
+            if int(man.get("imgsz", 0)) != int(config.YOLO_IMG_SIZE):
+                raise ValueError(f"imgsz {man.get('imgsz')} != config {config.YOLO_IMG_SIZE}")
+
+            for rel, want in (man.get("sha256") or {}).items():
+                fp = staging / rel
+                if not fp.is_file():
+                    raise ValueError(f"Datei aus manifest fehlt: {rel}")
+                h = hashlib.sha256()
+                with open(fp, "rb") as f:
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        h.update(chunk)
+                if h.hexdigest() != want:
+                    raise ValueError(f"sha256 mismatch: {rel}")
+
+            self._model_load_test(staging)
+
+            # atomic swap of best.pt / best.onnx / best_ncnn_model/
+            model_dir.mkdir(parents=True, exist_ok=True)
+            swapped = []
+            try:
+                for name in ("best.pt", "best.onnx", "best_ncnn_model"):
+                    src = staging / name
+                    if not src.exists():
+                        continue
+                    dst = model_dir / name
+                    old = model_dir / (name + ".old")
+                    if old.exists():
+                        (shutil.rmtree if old.is_dir() else os.remove)(old)
+                    if dst.exists():
+                        dst.rename(old)
+                        swapped.append((dst, old))
+                    shutil.move(str(src), str(dst))
+                    swapped.append((None, dst))
+            except Exception:
+                for a, b in reversed(swapped):
+                    try:
+                        if a is None:
+                            (shutil.rmtree if b.is_dir() else os.remove)(b)
+                        else:
+                            b.rename(a)
+                    except Exception:
+                        pass
+                raise
+
+            yolo_detector.reload_model()
+            ok = True
+            logger.info(f"Modell-Swap erfolgreich (ts={man.get('trained_ts', '?')})")
+        except Exception as e:
+            logger.error(f"Modell-Upload abgewiesen: {e}")
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+            suffix = ".uploaded" if ok else ".failed"
+            try:
+                shutil.move(str(tar_path), str(tar_path) + suffix)
+            except Exception:
+                pass
+            try:
+                hist = Path(config.MODEL_DIR).resolve().parent / "state" / "model_history.jsonl"
+                hist.parent.mkdir(parents=True, exist_ok=True)
+                with open(hist, "a") as f:
+                    f.write(json.dumps({
+                        "ts": time.time(), "tar": tar_path.name,
+                        "result": "uploaded" if ok else "failed",
+                    }) + "\n")
+            except Exception:
+                pass
+
+    def _model_load_test(self, staging: Path) -> None:
+        """Load the staged model in a subprocess so a bad model can't crash us."""
+        runtime = getattr(config, "YOLO_RUNTIME", "pt")
+        target = {
+            "pt": staging / "best.pt",
+            "onnx": staging / "best.onnx",
+            "ncnn": staging / "best_ncnn_model",
+        }.get(runtime, staging / "best.pt")
+        target = target.resolve()
+        if not target.exists():
+            raise ValueError(f"Artefakt für runtime={runtime} fehlt: {target.name}")
+        test_img = ""
+        _train = Path(config.TRAINING_IMAGE_DIR).resolve()
+        for cand in (Path(config.MODEL_DIR).resolve() / "test_1280.jpg",
+                     *sorted(_train.glob("bild_*.jpg"))[-1:]):
+            if cand.is_file():
+                test_img = str(cand)
+                break
+        code = (
+            "import sys;from ultralytics import YOLO;"
+            f"m=YOLO(r'{target}');"
+            "n={int(k):v for k,v in m.names.items()};"
+            f"exp={{i:c for i,c in enumerate({list(config.YOLO_EXPECTED_CLASSES)})}};"
+            "assert n==exp, ('names %r != %r'%(n,exp));"
+            + (f"m.predict(r'{test_img}',imgsz={int(config.YOLO_IMG_SIZE)},device='cpu',verbose=False);"
+               if test_img else "")
+            + "print('load-test ok')"
+        )
+        r = subprocess.run([sys.executable, "-c", code],
+                           capture_output=True, text=True, timeout=300)
+        if r.returncode != 0:
+            raise ValueError(f"Ladetest fehlgeschlagen: {r.stderr.strip()[-300:]}")
 
 
 # Singleton – wird erst bei Bedarf erzeugt (L1: kein Hardware-/Serial-Zugriff

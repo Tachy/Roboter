@@ -10,6 +10,7 @@ import multiprocessing as mp
 import numpy as np
 import time
 import shutil
+import threading
 
 # Logger einrichten
 logger = logging.getLogger("yolo_detector")
@@ -20,32 +21,64 @@ if not logging.getLogger().hasHandlers():
         datefmt="%H:%M:%S",
     )
 
-if not config.USE_DUMMY:
+model = None
+_weights = None
+_weights_abs = None
+_model_lock = threading.Lock()
+
+
+def _resolve_weights():
+    """Weights path/dir for the configured runtime ('pt' | 'ncnn' | 'onnx')."""
+    runtime = getattr(config, "YOLO_RUNTIME", "pt")
+    if runtime == "ncnn":
+        return getattr(config, "YOLO_NCNN_DIR", "./model/best_ncnn_model")
+    if runtime == "onnx":
+        base = getattr(config, "YOLO_MODEL_PATH", "best.pt")
+        return os.path.splitext(base)[0] + ".onnx"
+    return getattr(config, "YOLO_MODEL_PATH", "best.pt")
+
+
+def _load_model():
+    """(Re)load the YOLO model into the module globals. Returns True on success."""
+    global model, _weights, _weights_abs
+    if config.USE_DUMMY:
+        model = _weights = _weights_abs = None
+        return False
     from ultralytics import YOLO
 
-    _weights = getattr(config, "YOLO_MODEL_PATH", "best.pt")
-    _weights_abs = None
-    model = None
+    _weights = _resolve_weights()
+    _weights_abs = os.path.abspath(_weights)
+    runtime = getattr(config, "YOLO_RUNTIME", "pt")
     try:
-        _weights_abs = os.path.abspath(_weights)
         if not os.path.exists(_weights_abs):
-            logger.error(
-                f"[YOLO] Gewichtsdatei nicht gefunden: {_weights} (abspath={_weights_abs})"
-            )
-        elif not os.path.isfile(_weights_abs):
-            logger.error(
-                f"[YOLO] Gewichts-Pfad ist kein File: {_weights} (abspath={_weights_abs})"
-            )
-        else:
-            size = 0
-            try:
-                size = os.path.getsize(_weights_abs)
-            except Exception:
-                pass
-            model = YOLO(_weights_abs)
-            logger.info(f"[YOLO] Modell geladen: {_weights_abs} ({size} Bytes)")
+            logger.error(f"[YOLO] Gewichte nicht gefunden: {_weights} ({_weights_abs})")
+            model = None
+            return False
+        model = YOLO(_weights_abs)
+        try:
+            size = os.path.getsize(_weights_abs) if os.path.isfile(_weights_abs) else -1
+        except Exception:
+            size = -1
+        logger.info(
+            f"[YOLO] Modell geladen: {_weights_abs} (runtime={runtime}, {size} Bytes)"
+        )
+        return True
     except Exception as e:
         logger.exception(f"[YOLO] Konnte Modell nicht laden: {e}")
+        model = None
+        return False
+
+
+def reload_model():
+    """Hot-swap the running model from disk (called after a model-OTA)."""
+    with _model_lock:
+        ok = _load_model()
+    logger.info(f"[YOLO] reload_model -> {'ok' if ok else 'FEHLGESCHLAGEN'}")
+    return ok
+
+
+if not config.USE_DUMMY:
+    _load_model()
 
 # Globale Maxima für Ressourcenverbrauch (über Laufzeit)
 _PEAK_RSS_KB = 0

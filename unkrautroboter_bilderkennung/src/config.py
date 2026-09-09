@@ -49,6 +49,13 @@ TRAINING_IMAGE_DIR = "./training/"
 # Firmware upload directory for .hex files (Pi -> Mega flashing)
 UPLOAD_DIR = "./upload/"
 
+# --- Modell-OTA: model_<ts>.tar in MODEL_UPLOAD_DIR ablegen, Pi tauscht in MANUAL ---
+MODEL_UPLOAD_DIR = "./model_upload/"          # Inbox für Modell-Tars
+MODEL_DIR = "./model/"                        # Zielverzeichnis (best.pt, best_ncnn_model/, ...)
+YOLO_NCNN_DIR = "./model/best_ncnn_model"     # genutzt bei YOLO_RUNTIME == "ncnn"
+YOLO_RUNTIME = "pt"                           # "pt" | "ncnn" | "onnx"
+YOLO_EXPECTED_CLASSES = ["unkraut", "moos"]   # Reihenfolge maßgeblich; OTA weist bei Abweichung ab
+
 # GPIO-Pin (BCM) an der Raspberry Pi, der mit dem RESET-Pin des Mega verbunden ist.
 # Wenn None, wird kein Reset per GPIO durchgeführt. Hinweis: RESET ist aktiv LOW.
 FW_RESET_GPIO = 23  # z.B. 23
