@@ -49,3 +49,8 @@ yolo-training/datasets/
 yolo-training/holdout/
 yolo-training/.pixi/
 yolo-training/box/*.local
+
+# Deploy-Model Test-Artefakte
+/_stage/
+/_bad/
+/model_*.tar
