@@ -301,6 +301,70 @@ select {
     background: #333;
 }
 
+#training-box {
+    width: 100%;
+    background: #222;
+    border-radius: 8px;
+    padding: 12px;
+    color: #fff;
+    box-sizing: border-box;
+    margin-top: 10px;
+}
+
+#training-status {
+    font-size: 0.95em;
+}
+
+#training-status.run {
+    color: #f0a030;
+}
+
+#training-status.idle {
+    color: #5fd25f;
+}
+
+#training-meta {
+    font-size: 0.8em;
+    color: #aaa;
+    margin: 4px 0;
+    word-break: break-word;
+}
+
+#training-btn.wide {
+    margin-top: 8px;
+    width: 100%;
+    height: 40px;
+    border-radius: 6px;
+    border: 1px solid #777;
+    background: #2a2a2a;
+    color: #fff;
+    cursor: pointer;
+}
+
+#training-btn.wide:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.training-skip {
+    display: block;
+    font-size: 0.8em;
+    color: #aaa;
+    margin-top: 6px;
+}
+
+#training-log {
+    margin-top: 8px;
+    max-height: 180px;
+    overflow: auto;
+    background: #111;
+    color: #ccc;
+    font-size: 0.72em;
+    padding: 6px;
+    white-space: pre-wrap;
+    border-radius: 4px;
+}
+
 /* On narrow screens, place joypad below the live image instead of overlaying */
 @media (max-width: 1000px) {
     #joyui {

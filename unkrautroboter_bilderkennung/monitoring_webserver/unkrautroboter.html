@@ -39,6 +39,14 @@
                 <div class="rb-title">Dienst</div>
                 <button id="reset-btn" type="button" class="wide">Reset</button>
             </div>
+            <div id="training-box">
+                <div class="rb-title">Training</div>
+                <div id="training-status" class="idle">–</div>
+                <div id="training-meta">–</div>
+                <button id="training-btn" type="button" class="wide">Trainieren &amp; deployen</button>
+                <label class="training-skip"><input type="checkbox" id="training-skip"> skip export</label>
+                <pre id="training-log"></pre>
+            </div>
         </div>
         <div id="video-container">
             <div class="stream-wrapper">
@@ -61,6 +69,7 @@
     <script src="js/heartbeat.js" defer></script>
     <script src="js/joypad.js" defer></script>
     <script src="js/reset.js" defer></script>
+    <script src="js/training.js" defer></script>
 </body>
 
 </html>

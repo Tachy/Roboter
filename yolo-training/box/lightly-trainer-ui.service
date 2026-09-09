@@ -5,6 +5,9 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/lightly
+# TRAINER_TOKEN lives here (same value as CONTROL_TOKEN in the .4 dashboard):
+#   echo 'TRAINER_TOKEN=<token>' > ~/lightly/trainer.env
+EnvironmentFile=-%h/lightly/trainer.env
 ExecStart=%h/lightly/venv-trainer/bin/python %h/lightly/trainer/serve.py
 Environment=TRAINER_UI_HOST=0.0.0.0
 Environment=TRAINER_UI_PORT=8090

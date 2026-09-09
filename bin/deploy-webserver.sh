@@ -23,7 +23,7 @@ DEPLOY_PORT="${DEPLOY_PORT:-29876}"
 DEPLOY_DEST="${DEPLOY_DEST:-/var/www/html}"
 
 # Top-level files and asset dirs copied into the doc root.
-DEPLOY_FILES=(unkrautroboter.html send_udp.php)
+DEPLOY_FILES=(unkrautroboter.html send_udp.php train.php)
 DEPLOY_DIRS=(css js)
 
 DRY_RUN=0
