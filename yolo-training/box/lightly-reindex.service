@@ -1,0 +1,9 @@
+[Unit]
+Description=LightlyStudio ingest + pre-annotation (reindex + preannotate)
+After=lightly-studio.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/lightly/bin/lightly-reindex.sh
+Nice=10
+TimeoutStartSec=900

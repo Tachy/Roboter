@@ -1,0 +1,11 @@
+[Unit]
+Description=Pull robot training images into the LightlyStudio inbox
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/lightly/bin/pull-training-images.sh
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=180

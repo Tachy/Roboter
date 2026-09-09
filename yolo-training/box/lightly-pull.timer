@@ -1,0 +1,11 @@
+[Unit]
+Description=Pull robot training images every ~3 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=3min
+RandomizedDelaySec=20
+Persistent=true
+
+[Install]
+WantedBy=timers.target

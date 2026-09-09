@@ -42,20 +42,24 @@ ssh -p 29876 apache@192.168.179.4     # pre-installed key, no password; no passw
 - Reachable at `http://192.168.179.4/unkrautroboter.html` (HTTP 200 verified).
 - `js/config.js` points the browser back at the Pi: `HOST=192.168.179.252`, `HTTP_PORT=8080` (MJPEG `/stream`, `/last_capture.jpg`), `WS_PORT=8765` (WebSocket). Mode/joystick control still goes over the Pi's UDP ports (5005/5006/5007).
 - Source of truth for the dashboard is `unkrautroboter_bilderkennung/monitoring_webserver/` in this repo. Deploy with `bin/deploy-webserver.sh` — a plain scp copy of `unkrautroboter.html`, `send_udp.php`, `css/`, `js/` into the doc root (no delete, no chmod; other doc-root files untouched). `--dry-run` shows what it would copy.
-- Inside Claude Code, typing `/deploy-webserver [flags]` runs that script directly and spends no tokens: a `UserPromptSubmit` hook (`.claude/settings.json` → `bin/deploy-slash-hook.sh`) intercepts the command, runs the deploy, and blocks the prompt from reaching the model. The same generic hook also handles `/deploy-arduino` (allow-list in the hook script). The `.claude/commands/deploy-*.md` files only provide autocomplete + a fallback.
+- Inside Claude Code, typing `/deploy-webserver [flags]` runs that script directly and spends no tokens: a `UserPromptSubmit` hook (`.claude/settings.json` → `bin/deploy-slash-hook.sh`) intercepts the command, runs the deploy, and blocks the prompt from reaching the model. The same generic hook handles every `/deploy-<name>` on its allow-list — currently `webserver arduino pi4` (and `model` once Phase 5 lands). The `.claude/commands/deploy-*.md` files only provide autocomplete + a fallback.
 
-### Training Platform (RTX 4090)
+### Training Platform (RTX 4090) — `.17`
 
-Separate GPU box for the planned training software (labeling workflow, YOLO/perception model training — not yet built):
+GPU box that runs the labeling + training loop (plan: `~/.claude/plans/adaptive-orbiting-fountain.md`).
 
 ```bash
 ssh -p 29876 tachy@192.168.179.17     # pre-installed key, no password; SSH on port 29876 (not 22); no passwordless sudo
 ```
 
 - Host: `gamepc-4090-linux`, Ubuntu 26.04 LTS, kernel 7.0, user `tachy` (home `/home/tachy`).
-- GPU: NVIDIA GeForce RTX 4090, 24 GB, driver 595.84, CUDA 13.2 (driver runtime only — no CUDA toolkit / `nvcc`).
-- Bare system so far: `python3` 3.14 only, **no** `pip3` / `torch` / conda / uv / poetry / docker installed yet.
+- GPU: NVIDIA GeForce RTX 4090, 24 GB, driver 595.84, CUDA 13.2 (driver runtime only — no `nvcc`). Shared with `comfyui.service` (port 8188) and `ollama.service` (port 11434) — **do not touch `~/tachy/ComfyUI`**.
+- System `python3` is 3.14 **without pip**; `pixi` is installed but unused; **no Docker / conda / uv**. All pipeline work lives in isolated venvs under `~/lightly/`.
 - Disk: ~1.9 TB root, ~1.4 TB free.
+- **`~/lightly/` layout:** `venv/` (LightlyStudio 1.1.0, py3.14), `venv-trainer/` (ultralytics 8.4 + torch cu130 + onnx/ncnn), `lightly-studio/` (git clone, reference), `inbox/{_mirror,unkraut}/`, `studio/lightly_studio.db`, `datasets/`, `holdout/`, `models/{registry,current,pi_inbox_staging}/`, `bin/`, `logs/`.
+- **LightlyStudio** runs as `systemd --user` unit `lightly-studio.service` (`Linger=yes`) → browser UI at **`http://192.168.179.17:8001`**. Manage: `systemctl --user status|restart lightly-studio`.
+- **Image ingest:** `.17` pulls read-only from the Pi — `yolo-training/box/pull-training-images.sh` on a `lightly-pull.timer` rsyncs `admin@192.168.179.252:training/` into `inbox/_mirror/`, then content-addresses new files into `inbox/unkraut/<sha12>.jpg` (+ `inbox/manifest.jsonl`). The Pi runs unchanged. Requires the `.17` key `~/.ssh/id_ed25519_pi` in the Pi's `authorized_keys` with `command="rrsync -ro /home/admin/training"`.
+- Repo mirror of the `.17` setup: `yolo-training/box/` (systemd units, launcher scripts, bootstrap README); the loop scripts: `yolo-training/trainer/`.
 
 ## Running the Raspberry Pi App
 
@@ -88,6 +92,8 @@ The `.vscode/arduino.json` configures the workspace for the Arduino extension in
 
 **OTA firmware upload** (while Pi runs, robot in MANUAL mode): a `.hex` in `/home/admin/upload/` on the Pi — the Pi auto-flashes it to the Mega via avrdude and renames it to `.uploaded` or `.failed`. The scan only runs in MANUAL mode.
 
+**Model OTA** (same pattern, planned in the labeling-pipeline plan): a promoted detection model is bundled on `.17` into `model_<ts>.tar` (`best.pt` + `best_ncnn_model/` + `best.onnx` + `manifest.json`) and `bin/deploy-model.sh` scp's it to `/home/admin/model_upload/` on the Pi. In MANUAL mode `robot_control._check_model_upload()` validates it (sha256, class names, imgsz, subprocess load-test), atomically swaps `model/best*`, hot-reloads the YOLO model, and renames the tar to `.uploaded`/`.failed`. One `.old` generation is kept for manual rollback. `roboter.service` is **not** restarted. Inside Claude Code: `/deploy-model`.
+
 ## Architecture: Raspberry Pi ↔ Arduino MEGA Serial Protocol
 
 The entire autonomous operation flows over a single serial link (`/dev/serial0`, 115200 baud). `SerialManager` (`src/serial_manager.py`) reads in a background thread into a `queue.Queue`.
@@ -102,6 +108,7 @@ The entire autonomous operation flows over a single serial link (`/dev/serial0`,
 - `XY:x_mm,y_mm` — one weed coordinate in mm (multiple sent sequentially)
 - `DONE` — all coordinates for current frame sent
 - `JOYSTICK:X=...,Y=...[,B=...]` — manual drive command (-100..100 range)
+- `NOGO:x1,y1,x2,y2` + `NOGO:DONE` — pavement-edge segments the robot must not cross (**Stage 2, not yet implemented** — see plan `adaptive-orbiting-fountain.md` Phase 7)
 
 The Arduino's `anfrageUndAbarbeiten()` function is the AUTO mode cycle: send `GETXY`, collect `XY:` lines until `DONE`, sort by Y ascending, drive to each weed, lower brush, then advance for the next frame.
 
@@ -109,7 +116,7 @@ The Arduino's `anfrageUndAbarbeiten()` function is the AUTO mode cycle: send `GE
 
 ```
 Camera (picamera2, 1280×720)
-  → YOLO inference (model/best.pt, YOLOv8)
+  → YOLO inference (model/best.pt)     ← YOLOv8m @640 today; migrating to YOLO26s (NCNN FP16) @1280, see plan Phase 6
   → pixel (x,y)
   → geometry.pixel_to_world()     ← prefers ground_homography.npz; falls back to extrinsics.npz + ray-plane
   → (x_mm, y_mm) in robot frame   ← offset by WORLD_OFFSET_XY_MM from config
