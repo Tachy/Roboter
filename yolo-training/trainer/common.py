@@ -10,6 +10,8 @@ running `lightly-studio.service` may hold the DB open. Two access paths:
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import subprocess
@@ -124,20 +126,51 @@ class LS:
 
 
 # --------------------------------------------------------------------------- #
-# systemctl --user helpers (for the DB-API scripts)
+# owning the DuckDB file: stop the GUI service, do DB work, restart it.
+# A flock serialises every script that does this dance (reindex / export /
+# make_holdout / train_now) so the timer-driven reindex can't collide with a
+# manual run.
 # --------------------------------------------------------------------------- #
+STUDIO_CTL_LOCK = LIGHTLY_DIR / ".studio_ctl.lock"
+
+
 def _sc(*args):
     return subprocess.run(["systemctl", "--user", *args], check=True)
 
 
-def studio_stop():
-    _sc("stop", STUDIO_UNIT)
-    time.sleep(2)
-
-
-def studio_start():
-    _sc("start", STUDIO_UNIT)
-    LS().wait_ready()
+@contextlib.contextmanager
+def studio_stopped(lock_wait: float = 300.0):
+    """Hold an exclusive lock, stop lightly-studio, yield, restart + wait ready."""
+    LIGHTLY_DIR.mkdir(parents=True, exist_ok=True)
+    f = open(STUDIO_CTL_LOCK, "w")
+    deadline = time.time() + lock_wait
+    while True:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.time() > deadline:
+                f.close()
+                raise RuntimeError("studio_stopped: could not acquire control lock")
+            time.sleep(1)
+    try:
+        _sc("stop", STUDIO_UNIT)
+        time.sleep(2)
+        yield
+    finally:
+        # release our own DuckDB handle first, or the service can't get the
+        # lock back and crash-loops on start
+        try:
+            from lightly_studio.database import db_manager
+            db_manager.close()
+        except Exception:
+            pass
+        try:
+            _sc("start", STUDIO_UNIT)
+            LS().wait_ready(timeout=90)
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+            f.close()
 
 
 # --------------------------------------------------------------------------- #

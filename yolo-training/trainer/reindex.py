@@ -27,16 +27,13 @@ def main() -> int:
         return 0
 
     print(f"reindex: {len(new)} new image(s) → stop service, index, restart")
-    common.studio_stop()
-    try:
+    with common.studio_stopped():
         from lightly_studio.database import db_manager
         db_manager.connect(db_file=str(common.DB_FILE), must_exist=False)
         import lightly_studio as ls
 
         ds = ls.ImageDataset.load_or_create(name=common.DATASET_NAME)
         ds.add_images_from_path(path=str(common.INBOX), embed=True)
-    finally:
-        common.studio_start()
 
     # record everything currently on disk as indexed (idempotent set)
     common.add_seen(SEEN, sorted(on_disk - seen))
