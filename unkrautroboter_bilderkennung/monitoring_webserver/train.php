@@ -7,7 +7,7 @@
 const TRAINER_URL   = 'http://192.168.179.17:8090';
 // MUSS identisch zu CONTROL_TOKEN in send_udp.php / CONFIG.CONTROL_TOKEN sein
 // und zu TRAINER_TOKEN in ~/lightly/trainer.env auf .17.
-const CONTROL_TOKEN = 'r0b0t-4b7f9c1e2d6a8054-change-me';
+const CONTROL_TOKEN = 'da0fab74ab9e6556b15063bf07168541b29f7c2877547293';
 
 header('Content-Type: application/json; charset=utf-8');
 

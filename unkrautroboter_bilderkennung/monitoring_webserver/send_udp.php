@@ -8,7 +8,7 @@ const PORT_HEARTBEAT = 5007;
 // ==> UNBEDINGT ändern und identisch in js/config.js (CONFIG.CONTROL_TOKEN) setzen.
 // Reines LAN-Schutzmittel gegen versehentliche/fremde Requests (kein starker Schutz,
 // da der Token im ausgelieferten JS sichtbar ist).
-const CONTROL_TOKEN  = 'r0b0t-4b7f9c1e2d6a8054-change-me';
+const CONTROL_TOKEN  = 'da0fab74ab9e6556b15063bf07168541b29f7c2877547293';
 
 function controlAuthorized(): bool {
     $supplied = $_POST['token'] ?? $_GET['token'] ?? '';
