@@ -2,11 +2,12 @@
 #
 # Deploy the Pi 4 robot software to the Raspberry Pi -- a plain scp copy.
 #
-#   Source : unkrautroboter_bilderkennung/  ->  main.py + src/ only
-#   Target : admin@192.168.179.252:/home/admin/   (main.py, src/)
+#   Source : unkrautroboter_bilderkennung/  ->  main.py, pyproject.toml,
+#            poetry.lock (if tracked) + src/
+#   Target : admin@192.168.179.252:/home/admin/
 #
-# Only the git-tracked main.py and src/ files are copied, so __pycache__,
-# *.pyc and other local junk never ship. Everything else under
+# Only the git-tracked top-level files and src/ files are copied, so
+# __pycache__, *.pyc and other local junk never ship. Everything else under
 # unkrautroboter_bilderkennung/ stays off the Pi (model/, calibration/,
 # monitoring_webserver/, systemd/, tests/, joysticksteuerung_pc/, ...).
 # After copying, roboter.service is restarted (admin has passwordless sudo).
@@ -43,9 +44,10 @@ SRC_ROOT="$REPO/unkrautroboter_bilderkennung"
   || { echo "deploy-pi4: main.py / src not found under $SRC_ROOT" >&2; exit 1; }
 
 # git-tracked file list = the deployable source of truth.
+# (poetry.lock is optional — silently skipped by git ls-files until committed.)
 TRACKED=()
 while IFS= read -r f; do TRACKED+=("$f"); done \
-  < <(git -C "$SRC_ROOT" ls-files main.py src)
+  < <(git -C "$SRC_ROOT" ls-files main.py pyproject.toml poetry.lock src)
 [[ ${#TRACKED[@]} -gt 0 ]] \
   || { echo "deploy-pi4: no tracked files found (need a git checkout)" >&2; exit 1; }
 
@@ -70,20 +72,20 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
-srcfiles=()
+topfiles=(); srcfiles=()
 for f in "${TRACKED[@]}"; do
-  [[ $f == src/* ]] && srcfiles+=("$SRC_ROOT/$f")
+  if [[ $f == src/* ]]; then srcfiles+=("$SRC_ROOT/$f"); else topfiles+=("$SRC_ROOT/$f"); fi
 done
 
-echo ">> copying main.py ..."
-"${SCP[@]}" -- "$SRC_ROOT/main.py" "$TARGET:$DEPLOY_DEST/"
+echo ">> copying top-level files (${#topfiles[@]}) ..."
+"${SCP[@]}" -- "${topfiles[@]}" "$TARGET:$DEPLOY_DEST/"
 
 echo ">> copying src/ ..."
 "${SSH[@]}" "$TARGET" "mkdir -p '$DEPLOY_DEST/src'"
 "${SCP[@]}" -- "${srcfiles[@]}" "$TARGET:$DEPLOY_DEST/src/"
 
 echo ">> deployed:"
-"${SSH[@]}" "$TARGET" "cd '$DEPLOY_DEST' && ls -l main.py; echo; ls -l src/" | sed 's/^/     /'
+"${SSH[@]}" "$TARGET" "cd '$DEPLOY_DEST' && ls -l main.py pyproject.toml poetry.lock 2>/dev/null; echo; ls -l src/" | sed 's/^/     /'
 
 echo ">> restarting roboter.service ..."
 "${SSH[@]}" "$TARGET" \

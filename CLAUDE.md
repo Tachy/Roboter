@@ -69,12 +69,17 @@ python main.py          # run directly
 # or as systemd service: sudo systemctl start roboter.service
 ```
 
-**Dependencies** (managed via Poetry; `poetry.lock` is not in git):
+**Dependencies.** `pyproject.toml` is the manifest of intent; there is **no `poetry.lock` in git** and `poetry install` is deliberately **not** the install path on the Pi.
+
+- The Pi venv `/home/admin/pyvenv` is created `--system-site-packages` and its packages were assembled by hand: `pip` (with the piwheels ARM mirror from `/etc/pip.conf`) + apt (`picamera2`). Verified working set (Phase 6): `ultralytics 8.4.146`, `torch 2.8.0+cpu`, `torchvision 0.23.0`, `ncnn`, `onnx`/`onnxruntime`, `numpy 2.2.6`, `opencv-python 4.12`, `matplotlib 3.10`, `picamera2 0.3.31` (apt).
+- `poetry` on the Pi is only the `poetry run python main.py` launcher used by `roboter.service` (it runs inside the already-populated `pyvenv`; it installs nothing).
+- Why no lock: poetry's resolver can't model the piwheels/apt/system-site-packages mix. A fresh `poetry lock` resolves `numpy` down to `2.0.2` (a macOS-only `ultralytics` marker conflicts with `opencv-python`'s `numpy<2.3.0` cap and drags the whole tree to the last Python-3.9-era releases) and wants to pip-install `picamera2` over the apt build — i.e. it would *downgrade* the verified robot. Reproducibility target is the pinned direct versions in `pyproject.toml` installed via `pip` from piwheels, not a lockfile.
+- `bin/deploy-pi4.sh` ships `pyproject.toml` alongside `main.py`/`src/` so the Pi's copy stays in sync with the repo.
+
 ```bash
-cd unkrautroboter_bilderkennung
-poetry install
+# reference only — normal deploy is bin/deploy-pi4.sh
+cd unkrautroboter_bilderkennung && poetry install
 ```
-The Pi's `pyvenv` currently has `ultralytics 8.4.146` + `ncnn` + `torch 2.8.0+cpu` (bumped in place via `pyvenv/bin/pip install`; `pyproject.toml` reflects the intent — run `poetry lock && poetry install` to reconcile if needed).
 
 **Joystick client** (run on PC with USB gamepad):
 ```bash

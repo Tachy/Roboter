@@ -5,14 +5,21 @@ description = "Bilderkennungssystem für einen Unkrautroboter"
 authors = ["Johannes Güntert <johannes@gutshof-guentert.de>"]
 package-mode = false
 
+# Fenster = Python-Versionen, auf denen diese Software real laeuft: der Pi hat
+# 3.11 (Raspberry Pi OS Bookworm). Untergrenze 3.11, damit poetry die aktuellen
+# Wheels aufloest (numpy 2.2, matplotlib 3.10 ...) statt der letzten 3.9-tauglichen.
+# Obergrenze <3.14, weil torch 2.8 triton 3.4 zieht (linux), das Python <3.14 will.
+# Bei einem Pi-OS-Bump hier anpassen und `poetry lock` neu laufen lassen.
 [tool.poetry.dependencies]
-python = "^3.9"
+python = ">=3.11,<3.14"
 picamera2 = "*"          # Systempaket auf dem Pi (apt), kein PyPI-Pin sinnvoll
 pillow = ">=10.0"
 pyserial = ">=3.5"
 ultralytics = ">=8.4,<8.5"   # YOLO26-fähig; NCNN-Inferenz auf ARM64 gefixt (>= 8.4.x)
 ncnn = "*"               # NCNN-Runtime (YOLO_RUNTIME="ncnn"); aarch64-Wheel auf dem Pi
-numpy = ">=1.24"         # direkt genutzt (geometry, yolo_detector, camera)
+torch = "2.8.0"          # exakt gepinnt: CPU-Wheel auf dem Pi, nie CUDA nachziehen
+torchvision = "0.23.0"
+numpy = ">=1.24,<3"     # direkt genutzt (geometry, yolo_detector, camera)
 websockets = ">=11.0"    # status_ws_server – vorher nicht deklariert
 
 [tool.poetry.group.dev.dependencies]
