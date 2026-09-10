@@ -35,7 +35,6 @@ def test_finalize_from_injected_corners(tmp_path, monkeypatch):
     monkeypatch.setattr(calibration, "POLY_FILE", tmp_path / "ground_poly.npz")
     monkeypatch.setattr(calibration, "EXTR_FILE", tmp_path / "extrinsics.npz")
     monkeypatch.setattr(geometry, "_C", None, raising=False)
-    monkeypatch.setattr(geometry, "_H", None, raising=False)
 
     sess = calibration.ExtrinsicSession()
     K, D, R, t = _synthetic_pose()
@@ -118,7 +117,6 @@ def test_add_frame_on_rendered_board_then_finalize(tmp_path, monkeypatch):
     monkeypatch.setattr(calibration, "POLY_FILE", tmp_path / "ground_poly.npz")
     monkeypatch.setattr(calibration, "EXTR_FILE", tmp_path / "extrinsics.npz")
     monkeypatch.setattr(geometry, "_C", None, raising=False)
-    monkeypatch.setattr(geometry, "_H", None, raising=False)
 
     sess = calibration.ExtrinsicSession()
     # Board-Bild: 1 px == 1 mm, Rand m -> Board-mm (x,y) == Pixel (x+m, y+m).

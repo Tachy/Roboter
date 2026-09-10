@@ -194,4 +194,6 @@ def add_seen(name: str, items) -> None:
 
 
 def inbox_basenames() -> set[str]:
-    return {p.name for p in INBOX.glob("*.jpg")} | {p.name for p in INBOX.glob("*.JPG")}
+    """Basenames of the training frames in the inbox. The Pi writes only
+    lossless PNG (2028x1520 — the same frame YOLO sees at runtime)."""
+    return {p.name for p in INBOX.glob("*.png")} | {p.name for p in INBOX.glob("*.PNG")}

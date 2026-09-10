@@ -2,23 +2,14 @@
 Modul für die Kamera- und Stream-Funktionalität des Unkrautroboters.
 """
 
-import io
-from pathlib import Path
 import threading
 import time
 import logging
-from . import config
-import numpy as np
-import cv2  # für Undistortion-Remap
-from picamera2 import Picamera2  # type: ignore
-from picamera2.encoders import MJPEGEncoder  # type: ignore
-from picamera2.outputs import FileOutput  # type: ignore
-from http.server import BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-try:
-    from http.server import ThreadingHTTPServer as ServerClass
-except ImportError:
-    from http.server import HTTPServer as ServerClass  # Fallback (single-threaded)
+import cv2  # JPEG-Encode für den MJPEG-Stream
+from picamera2 import Picamera2  # type: ignore
+
 from . import config
 
 # Logger einrichten
@@ -31,19 +22,12 @@ if not logging.getLogger().hasHandlers():
     )
 
 
-class MJPEGOutput(io.BufferedIOBase):
+class _StreamFrameBuffer:
+    """Thread-sicherer Halter für das jüngste JPEG-Frame des MJPEG-Streams."""
+
     def __init__(self):
         self.frame = None
         self.lock = threading.Lock()
-
-    def write(self, buf):
-        # Wird vom Hardware-MJPEG-Encoder aufgerufen
-        with self.lock:
-            self.frame = buf
-
-    def read(self, size=-1):
-        with self.lock:
-            return self.frame if self.frame else b""
 
 
 class StreamHandler(BaseHTTPRequestHandler):
@@ -135,16 +119,6 @@ def get_cpu_temperature():
         return "N/A"
 
 
-# ==== Kalibrierung / Undistortion (nur für Einzelbilder) ====
-_calib_loaded = False
-_calib_K = None
-_calib_D = None
-_calib_newK = None  # newK aus der Datei (optional)
-_calib_img_size = None  # (W, H) aus der Datei
-_calib_map1 = None
-_calib_map2 = None
-_undistort_cache = {}  # {(w,h): (map1, map2, newK)}
-
 # Letztes aufgenommenes Bild (JPEG) im Speicher halten, inkl. Zeitstempel
 _last_capture_lock = threading.Lock()
 _last_capture_bytes: bytes | None = None
@@ -173,142 +147,6 @@ def _encode_and_store_last_capture(bgr_image, quality: int = 90) -> bool:
     except Exception:
         pass
     return False
-
-
-# kein Datei-Reload nötig; wir encodieren direkt aus dem Array für die Vorschau
-
-
-def _ensure_calibration_loaded():
-    """Lädt Kalibrierungsdaten aus ./calibration/cam_calib_charuco.npz, wenn vorhanden."""
-    global _calib_loaded, _calib_K, _calib_D, _calib_newK, _calib_img_size
-    global _calib_map1, _calib_map2
-    if _calib_loaded:
-        return True
-    calib_path = Path("./calibration/cam_calib_charuco.npz")
-    if not calib_path.exists():
-        logger.warning(
-            "Keine Kalibrierungsdatei gefunden: ./calibration/cam_calib_charuco.npz – speichere ungefilterte Bilder."
-        )
-        _calib_loaded = False
-        return False
-    try:
-        d = np.load(str(calib_path), allow_pickle=True)
-        _calib_K = d["K"].astype(np.float64)
-        _calib_D = d["D"].astype(np.float64)
-        try:
-            sz = d["img_size"]
-            _calib_img_size = (int(sz[0]), int(sz[1]))  # (W,H)
-        except Exception:
-            _calib_img_size = None
-        # map1/map2 optional verwenden, wenn Größen passen
-        _calib_map1 = d.get("map1", None)
-        _calib_map2 = d.get("map2", None)
-        _nk = d.get("newK", None)
-        _calib_newK = None if _nk is None else np.asarray(_nk, dtype=np.float64)
-        _calib_loaded = True
-        logger.info(
-            f"Kalibrierung geladen (K,D) aus ./calibration/cam_calib_charuco.npz; img_size={_calib_img_size}"
-        )
-        return True
-    except Exception as e:
-        logger.error(f"Kalibrierung konnte nicht geladen werden: {e}")
-        _calib_loaded = False
-        return False
-
-
-def _get_maps_for_size(width: int, height: int):
-    """Erzeugt/cached Remap-Tabellen + newK für gegebene Größe basierend auf K,D.
-    Berechnet newK für die Zielgröße automatisch (alpha=0).
-
-    Rückgabe: (map1, map2, newK) oder None.
-    """
-    key = (width, height)
-    if key in _undistort_cache:
-        return _undistort_cache[key]
-    if not _ensure_calibration_loaded():
-        return None
-    try:
-        # Wenn die Größen exakt passen und map1/map2 vorhanden sind, nutze sie direkt
-        if (
-            _calib_img_size == (width, height)
-            and _calib_map1 is not None
-            and _calib_map2 is not None
-        ):
-            logger.debug("Verwende gespeicherte Remap-Tabellen aus Kalibrierungsdatei.")
-            map1, map2 = _calib_map1, _calib_map2
-            if _calib_newK is not None:
-                newK = _calib_newK
-            else:
-                newK, _ = cv2.getOptimalNewCameraMatrix(
-                    _calib_K, _calib_D, (width, height), alpha=0
-                )
-        else:
-            # Prüfe Aspect-Ratio – bei Abweichung warnen
-            if _calib_img_size is not None:
-                cw, ch = _calib_img_size
-                ar0 = cw / ch
-                ar1 = width / height
-                if abs(ar0 - ar1) > 1e-3:
-                    logger.warning(
-                        f"Abweichende Aspect-Ratio (calib {cw}x{ch} vs capture {width}x{height}) – Verzerrungen möglich."
-                    )
-                # Skaliere K auf Zielgröße
-                sx = width / cw
-                sy = height / ch
-                K_scaled = _calib_K.copy()
-                K_scaled[0, 0] *= sx
-                K_scaled[0, 2] *= sx
-                K_scaled[1, 1] *= sy
-                K_scaled[1, 2] *= sy
-            else:
-                # keine Info zu Kalibriergröße – versuche unskaliert (kann verzerren)
-                logger.warning(
-                    "Kalibriergröße unbekannt – verwende unskaliertes K. Besser mit gleicher Auflösung kalibrieren."
-                )
-                K_scaled = _calib_K
-
-            img_size = (width, height)
-            newK, roi = cv2.getOptimalNewCameraMatrix(
-                K_scaled, _calib_D, img_size, alpha=0
-            )
-            map1, map2 = cv2.initUndistortRectifyMap(
-                K_scaled, _calib_D, None, newK, img_size, cv2.CV_16SC2
-            )
-        newK = np.asarray(newK, dtype=np.float64)
-        _undistort_cache[key] = (map1, map2, newK)
-        return map1, map2, newK
-    except Exception as e:
-        logger.error(f"Fehler beim Erzeugen der Remap-Tabellen: {e}")
-        return None
-
-
-def undistort_bgr(bgr):
-    """Entzerrt ein BGR-Bild wie capture_image(undistort=True).
-
-    Rückgabe: (entzerrtes BGR, newK 3x3) oder (Originalbild, None), wenn keine
-    Kalibrierung vorhanden ist. newK ist die Intrinsik des entzerrten Bildes –
-    genau die Matrix, mit der geometry.pixel_to_world / solvePnP rechnen müssen.
-    """
-    if bgr is None:
-        return None, None
-    h, w = bgr.shape[:2]
-    mm = _get_maps_for_size(w, h)
-    if mm is None:
-        return bgr, None
-    map1, map2, newK = mm
-    out = cv2.remap(bgr, map1, map2, interpolation=cv2.INTER_LINEAR)
-    return out, newK
-
-
-# Overlay-Unterstützung entfällt im Hardware-Stream vollständig
-
-
-def reload_calibration():
-    """Leert den Map-Cache und lädt Kalibrierung neu (z. B. nach neuer Kalibrierdatei)."""
-    global _undistort_cache, _calib_loaded
-    _undistort_cache.clear()
-    _calib_loaded = False
-    _ensure_calibration_loaded()
 
 
 def get_last_capture_timestamp():
@@ -398,83 +236,32 @@ def ensure_camera_started() -> bool:
     return False
 
 
-def stop_camera_if_idle():
-    """Kamera stoppen, wenn kein Stream aktiv ist."""
+def capture_image(filename: str, size):
+    """Nimmt ein Rohbild in `size` (w,h) vom `main`-Stream auf, aktualisiert die
+    `/last_capture`-Vorschau und speichert es unter `filename` (Format nach
+    Endung, .png = verlustfrei). Wirft bei Fehlschlag."""
+    logger.debug("Starte Bildaufnahme...")
+    started_here = ensure_camera_started()
     try:
-        if not stream_active and picam2.started:
-            picam2.stop()
-            logger.info("Kamera gestoppt (idle, kein Stream aktiv).")
-    except Exception as e:
-        logger.error(f"Fehler beim Stoppen der Kamera: {e}")
-
-
-# Alte Signatur entfernt; neue Signatur unten
-def capture_image(filename: str, undistort: bool = True, size=None):
-    """
-    Nimmt ein einzelnes Bild auf und speichert es unter `filename`.
-    - undistort=True: Bild wird entzerrt (Legacy; im Betrieb nicht mehr genutzt).
-    - undistort=False: Rohbild.
-    - size: (w,h) -> Aufnahme in dieser nativen Auflösung per Mode-Switch
-      (capture_still_array); sonst Stream-Auflösung.
-    Bildformat richtet sich nach der Dateiendung (.png verlustfrei, .jpg).
-    """
-    try:
-        logger.debug("Starte Bildaufnahme...")
-        started_here = ensure_camera_started()
-        if size is not None:
-            bgr = capture_still_array(size)
-        else:
-            arr = picam2.capture_array()
-            if arr is None:
-                raise RuntimeError("capture_array lieferte None")
-            bgr = _arr_to_bgr(arr)
-        h, w = bgr.shape[:2]
-        if undistort:
-            if (
-                _ensure_calibration_loaded()
-                and _calib_img_size
-                and (w, h) != _calib_img_size
-            ):
-                logger.info(
-                    f"Undistortion bei {w}x{h}, Kalibrierung bei {_calib_img_size} – skaliere K entsprechend."
-                )
-            mm = _get_maps_for_size(w, h)
-            if mm is not None:
-                map1, map2, _newK = mm
-                out = cv2.remap(bgr, map1, map2, interpolation=cv2.INTER_LINEAR)
-                _encode_and_store_last_capture(out, quality=90)
-                ok = cv2.imwrite(filename, out)
-                if not ok:
-                    raise RuntimeError("cv2.imwrite fehlgeschlagen")
-                logger.info(f"Bild (undistorted) aufgenommen: {filename}")
-                return filename
-            else:
-                logger.warning("Undistortion nicht möglich, speichere Rohbild.")
-        # Rohbild speichern (entweder weil undistort=False oder kein Mapping möglich)
+        bgr = capture_still_array(size)
         _encode_and_store_last_capture(bgr, quality=90)
-        ok = cv2.imwrite(filename, bgr)
-        if not ok:
-            raise RuntimeError("cv2.imwrite fehlgeschlagen (Fallback)")
-        logger.info(f"Bild (roh) aufgenommen: {filename}")
+        if not cv2.imwrite(filename, bgr):
+            raise RuntimeError(f"cv2.imwrite fehlgeschlagen: {filename}")
+        logger.info(f"Bild aufgenommen: {filename}")
         return filename
-    except Exception as e:
-        logger.error(f"Fehler bei der Bildaufnahme: {str(e)}")
     finally:
-        try:
-            if started_here and not stream_active:
+        if started_here and not stream_active:
+            try:
                 picam2.stop()
-                logger.info(
-                    "Kamera nach Einzelaufnahme gestoppt (kein aktiver Stream)."
-                )
-        except Exception:
-            pass
+                logger.info("Kamera nach Einzelaufnahme gestoppt (kein aktiver Stream).")
+            except Exception:
+                pass
 
 
 def start_http_server():
     """Startet den HTTP-Server für den Stream."""
-    server = ServerClass(("", config.HTTP_PORT), StreamHandler)
-    server_type = getattr(server, "__class__", type(server)).__name__
-    logger.info(f"HTTP-Server ({server_type}) läuft auf Port {config.HTTP_PORT}...")
+    server = ThreadingHTTPServer(("", config.HTTP_PORT), StreamHandler)
+    logger.info(f"HTTP-Server läuft auf Port {config.HTTP_PORT}...")
     server.serve_forever()
 
 
@@ -489,7 +276,7 @@ _video_config = picam2.create_video_configuration(
     buffer_count=4,
 )
 picam2.configure(_video_config)
-stream_output = MJPEGOutput()
+stream_output = _StreamFrameBuffer()
 stream_active = False
 _stream_thread = None
 _stream_stop = threading.Event()
@@ -526,5 +313,3 @@ def capture_still_array(size=None, n: int = 1):
                 bgr = cv2.resize(bgr, (tw, th), interpolation=cv2.INTER_AREA)
         frames.append(bgr)
     return frames[0] if n == 1 else frames
-
-# Keine Software-Stream-Schleife mehr

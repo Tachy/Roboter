@@ -237,11 +237,6 @@ class CalibrationSession:
             marker_mm=DISTORTION_MARKER_MM,
             aruco_dict=DICT_NAME,
         )
-        # Kamera-Kalibrierung neu laden
-        try:
-            camera.reload_calibration()
-        except Exception:
-            pass
         return OUT_FILE, ret
 
     def stop(self):

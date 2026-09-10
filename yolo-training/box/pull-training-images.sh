@@ -3,9 +3,10 @@
 # Pull robot training images into the LightlyStudio inbox.
 #
 # Runs on the .17 GPU box (systemd --user, lightly-pull.timer, ~every 3 min).
-# The Raspberry Pi is NOT modified: it keeps writing bild_NNNN.jpg into
+# The Raspberry Pi is NOT modified: it keeps writing lossless bild_NNNN.png
+# (2028x1520, 4:3 — the same frame YOLO sees at runtime) into
 # /home/admin/training/, this script rsyncs them over read-only and
-# content-addresses new ones into inbox/unkraut/<sha12>.jpg.
+# content-addresses new ones into inbox/unkraut/<sha12>.png.
 #
 # Env overrides:
 #   LIGHTLY_DIR   ($HOME/lightly)
@@ -35,7 +36,7 @@ flock -n 9 || { echo "$(date -Is) pull: another run holds the lock, skipping"; e
 log() { echo "$(date -Is) pull: $*"; }
 
 # --- 1. mirror the Pi's training/ dir --------------------------------------
-# No --delete and no --ignore-existing: a bild_0001.jpg that changed after a
+# No --delete and no --ignore-existing: a bild_0001.png that changed after a
 # Pi re-image is re-fetched (different size/mtime), then step 2 gives it a new
 # sha and a new inbox file. The mirror is the durable .17-side archive.
 if [[ "$PI_SRC" == *:* ]]; then
@@ -55,10 +56,10 @@ fi
 # --- 2. content-address new images into inbox/unkraut/ --------------------
 new=0
 shopt -s nullglob
-for f in "$MIRROR"/bild_*.jpg "$MIRROR"/bild_*.JPG; do
+for f in "$MIRROR"/bild_*.png "$MIRROR"/bild_*.PNG; do
   [[ -f "$f" ]] || continue
   sha="$(sha1sum "$f" | cut -c1-12)"
-  dst="$UNKRAUT/$sha.jpg"
+  dst="$UNKRAUT/$sha.png"
   [[ -e "$dst" ]] && continue
   # hardlink when possible (same fs, never edited); copy as fallback
   if ! ln "$f" "$dst" 2>/dev/null; then

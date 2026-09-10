@@ -255,7 +255,7 @@ class RobotControl:
 
             if not use_world:
                 logger.error(
-                    "[AUTO] Keine Welttransformation (Homographie/Extrinsik) geladen – "
+                    "[AUTO] Keine Kurvenmatrix geladen (ground_poly.npz fehlt) – "
                     "AUTO-Fahrt ohne Kalibrierung deaktiviert. Sende NOCALIB."
                 )
                 try:
@@ -268,13 +268,10 @@ class RobotControl:
                 logger.info("-> Arduino: NOCALIB")
                 return
 
-            # ROHbild in GETXY-Auflösung aufnehmen (Mode-Switch, keine Entzerrung),
-            # verlustfrei als PNG ablegen. geometry.pixel_to_world skaliert die
-            # Pixel intern auf die EXTRINSIK-Referenzauflösung.
-            getxy_size = getattr(config, "STILL_RESOLUTION_GETXY", None)
-            bgr = camera.capture_still_array(getxy_size) if getxy_size else _to_bgr(
-                camera.picam2.capture_array()
-            )
+            # ROHbild in GETXY-Auflösung aufnehmen (keine Entzerrung), verlustfrei
+            # als PNG ablegen. geometry.pixel_to_world skaliert die Pixel intern
+            # auf die EXTRINSIK-Referenzauflösung.
+            bgr = camera.capture_still_array(config.STILL_RESOLUTION_GETXY)
             src_h, src_w = bgr.shape[:2]
             filename = "frame.png"
             if not cv2.imwrite(filename, bgr):
@@ -491,11 +488,12 @@ class RobotControl:
                 return
             time.sleep(0.5)  # Nachschwingen abklingen lassen
 
-            # N Bilder in voller Auflösung (ein Mode-Switch für alle).
-            extr_size = getattr(config, "STILL_RESOLUTION_EXTRINSIK", None)
+            # N Bilder in voller Auflösung.
             status_bus.set_message(f"Extrinsik: nehme {n} Bilder auf ...")
             try:
-                frames = camera.capture_still_array(extr_size, n=max(2, n))
+                frames = camera.capture_still_array(
+                    config.STILL_RESOLUTION_EXTRINSIK, n=max(2, n)
+                )
             except Exception as e:
                 status_bus.set_message(f"Extrinsik: Aufnahme fehlgeschlagen ({e})")
                 return
@@ -871,7 +869,7 @@ class RobotControl:
         test_img = ""
         _train = Path(config.TRAINING_IMAGE_DIR).resolve()
         for cand in (Path(config.MODEL_DIR).resolve() / "test_1280.jpg",
-                     *sorted(_train.glob("bild_*.jpg"))[-1:]):
+                     *sorted(_train.glob("bild_*.png"))[-1:]):
             if cand.is_file():
                 test_img = str(cand)
                 break
