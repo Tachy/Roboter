@@ -419,8 +419,8 @@ class RobotControl:
             else:
                 status_bus.set_message(
                     "Extrinsik: Schlitten auf X=0 – Board mit Ecke (0,0) unter den "
-                    "Bürstenmittelpunkt, X-Achse parallel zur Fahrtrichtung, dann "
-                    "'Bild aufnehmen'"
+                    "Bürstenmittelpunkt, X-Achse parallel zur Fahrtrichtung. Dann "
+                    "'Bild aufnehmen' (Kamera fährt zur Aufnahme auf X=220)"
                 )
                 if camera.is_camera_started():
                     _capture_preview(
@@ -456,15 +456,28 @@ class RobotControl:
         ).start()
 
     def _run_extrinsic_sequence(self):
-        """Worker: N Kamerabilder aufnehmen, ChArUco-Ecken poolen, Pose schätzen
-        und ground_homography.npz schreiben. Keine Schlitten-/Serial-Aktion – die
-        Bürste ist nie im Bild, das Board (X-Achse parallel zur Bürstenfahrt,
-        Ecke (0,0) unter der Bürste bei X=0) definiert das Koordinatensystem."""
+        """Worker: Schlitten (= Kamera, sitzt auf der X-Achse) auf die
+        AUTO-Aufnahmeposition X=220 fahren, dann N Kamerabilder aufnehmen,
+        ChArUco-Ecken poolen, Pose schätzen und ground_homography.npz schreiben.
+        Das Board (X-Achse parallel zur Bürstenfahrt, Ecke (0,0) unter der
+        Bürste bei X=0) definiert das Koordinatensystem (Board-mm == mech-mm)."""
         try:
             sess = self.extr_session
             if sess is None:
                 return
             n = int(getattr(config, "EXTRINSIK_NUM_FRAMES", 8))
+
+            # Kamera auf die spätere AUTO-Aufnahmeposition (MITTEX = 220 mm)
+            status_bus.set_message("Extrinsik: Kamera fährt auf X=220 (AUTO-Position) ...")
+            self.send_command("GOTOX:220")
+            line = self.serial.wait_for(("XREACHED:", "FAULT:"), timeout=45.0)
+            if line is None or line.startswith("FAULT"):
+                status_bus.set_message(
+                    f"Extrinsik: Anfahren X=220 fehlgeschlagen ({line}) – abgebrochen"
+                )
+                return
+            time.sleep(0.5)  # Nachschwingen abklingen lassen
+
             for i in range(n):
                 if self.get_mode() != "EXTRINSIK":
                     status_bus.set_message("Extrinsik: abgebrochen (Moduswechsel)")

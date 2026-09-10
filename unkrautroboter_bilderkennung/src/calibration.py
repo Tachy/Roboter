@@ -294,7 +294,7 @@ class ExtrinsicSession:
         except Exception:
             pass
 
-        if n_ch < 6:
+        if n_ch < 12:
             return False, f"Board zu schwach erkannt ({n_ch} Ecken)", draw
 
         self.img_pts.append(np.asarray(ch_corners, dtype=np.float64).reshape(-1, 2))
@@ -314,8 +314,20 @@ class ExtrinsicSession:
             raise RuntimeError("Keine verwertbare Aufnahme.")
         imgp = np.vstack(self.img_pts)
         objp = np.vstack(self.obj_pts)
-        if len(imgp) < 8:
-            raise RuntimeError(f"Zu wenige ChArUco-Ecken gesamt ({len(imgp)}).")
+
+        x_span = float(objp[:, 0].max() - objp[:, 0].min())
+        y_span = float(objp[:, 1].max() - objp[:, 1].min())
+        uniq = len(np.unique(np.round(objp[:, :2], 1), axis=0))
+
+        # Abdeckungs-Prüfung: aus zu wenig / zu kleinem Board-Ausschnitt wird die
+        # Pose (und erst recht die Extrapolation bis zur Bürstenlinie) unbrauchbar
+        # -> lieber nichts speichern und den Bediener anleiten.
+        if uniq < 40 or x_span < 200.0 or y_span < 150.0:
+            raise RuntimeError(
+                f"Board zu wenig im Bild: {uniq} versch. Ecken, sichtbar "
+                f"x {x_span:.0f} mm / y {y_span:.0f} mm. Board größer/näher/"
+                f"schärfer ins Bild bringen (mehr Marker, weniger Glanz)."
+            )
 
         flag = getattr(cv2, "SOLVEPNP_ITERATIVE", 0)
         ok, rvec, tvec = cv2.solvePnP(objp, imgp, self.newK, self.D0, flags=flag)

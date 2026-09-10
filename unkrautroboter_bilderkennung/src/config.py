@@ -74,10 +74,11 @@ FW_RESET_POST_PULSE_WAIT = 0.1
 # Beispiel: WORLD_OFFSET_XY_MM = (x_mm, y_mm) – wird von pixel_to_world subtrahiert
 WORLD_OFFSET_XY_MM = (0.0, 0.0)
 
-# EXTRINSIK: Anzahl der Kamerabilder, die pro Kalibrierung gepoolt werden
-# (Board + Kamera statisch -> alle Bilder sehen dieselbe Pose; Pooling mittelt
-# das Ecken-Rauschen). Die Board-Ecke (0,0) liegt bei Schlitten-X=0 unter dem
-# Bürstenmittelpunkt und die Board-X-Achse parallel zur Bürstenfahrt -> Board-mm
-# == mechanische mm (keine weitere Transformation). Feinkorrektur des Ursprungs
-# nur über WORLD_OFFSET_XY_MM.
-EXTRINSIK_NUM_FRAMES = 8
+# EXTRINSIK: Anzahl der Kamerabilder, die pro Kalibrierung gepoolt werden.
+# Kamera sitzt auf der X-Achse; die Aufnahme erfolgt bei X=220 (MITTEX = die
+# spätere AUTO-Aufnahmeposition), Board + Kamera stehen dabei still -> eins
+# würde genügen, ein paar mitteln nur das Sensor-/Ecken-Rauschen.
+# Die Board-Ecke (0,0) liegt (Schlitten zuvor auf X=0) unter dem
+# Bürstenmittelpunkt, Board-X-Achse parallel zur Bürstenfahrt -> Board-mm ==
+# mechanische mm. Feinkorrektur des Ursprungs nur über WORLD_OFFSET_XY_MM.
+EXTRINSIK_NUM_FRAMES = 5
