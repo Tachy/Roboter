@@ -90,7 +90,8 @@ volatile bool abortRequested = false; // MODE:MANUAL während AUTO -> Zyklus abb
 enum Mode {
     WAITING_FOR_START, // Initialer Zustand
     MANUAL,
-    AUTO
+    AUTO,
+    EXTRINSIK // Kamera-Extrinsik-Kalibrierung: Pi steuert X per GOTOX:<mm>
 };
 
 Mode currentMode = WAITING_FOR_START; // Startet im Wartezustand
@@ -1470,6 +1471,8 @@ void sendeStatusJson() {
         modeStr = "MANUAL";
     else if (currentMode == AUTO)
         modeStr = "AUTO";
+    else if (currentMode == EXTRINSIK)
+        modeStr = "EXTRINSIK";
 
     StaticJsonDocument<384> doc;
     doc["mode"] = modeStr;
@@ -1593,6 +1596,41 @@ void processSerialCommand() {
                 setzeZPosition(10);
                 setzeXPosition(MITTEX);
             }
+        } else if (cmdBuffer.indexOf("MODE:EXTRINSIK") >= 0) {
+            // Kamera-Extrinsik: der Pi fährt die X-Positionen per GOTOX:<mm> an.
+            bool warAuto = (currentMode == AUTO);
+            currentMode = EXTRINSIK;
+            debugln("RCD: EXTRINSIK");
+            if (warAuto) {
+                abortRequested = true; // laufenden AUTO-Zyklus abbrechen (M4)
+            } else {
+                stoppeAlleMotoren();
+                abortRequested = false; // evtl. Rest aus einem früheren Abbruch
+                moveFault = false;
+                setzeZPosition(10); // Bürste hoch (kein Schleifen auf dem Board)
+            }
+        }
+
+        // X-Achse absolut anfahren (nur EXTRINSIK). Antwort: XREACHED:<ist_mm>
+        // (die tatsächliche Position; rechts kann der Endschalter früher greifen)
+        // bzw. FAULT:MOVE / FAULT:NOCALIB.
+        if (cmdBuffer.startsWith("GOTOX:") && currentMode == EXTRINSIK) {
+            if (!calibOk) {
+                Serial.println("FAULT:NOCALIB");
+            } else {
+                float mm = cmdBuffer.substring(6).toFloat();
+                mm = constrain(mm, 0.0f, (float)MAX_X);
+                moveFault = false;
+                abortRequested = false;
+                setzeXPosition(mm);
+                Serial.print("XREACHED:");
+                Serial.println(encoderX / IMPULSE_X_PRO_MM, 1);
+                if (moveFault)
+                    Serial.println("FAULT:MOVE");
+            }
+            cmdBuffer = "";
+            lineComplete = false;
+            return;
         }
 
         // Format: JOYSTICK:X=-48,Y=-54[,B=3]   (optionales Button-Feld B=)
@@ -1733,10 +1771,10 @@ void loop() {
 
     sendeStatus();
 
-    // Sofortige Endschalter-Überprüfung im MANUAL-Modus, damit Endschalter
-    // auch dann direkt reagieren, wenn Joystick-Nachrichten seltener eintreffen.
+    // Sofortige Endschalter-Überprüfung im MANUAL-/EXTRINSIK-Modus, damit
+    // Endschalter auch dann direkt reagieren, wenn Kommandos selten eintreffen.
     // Reagiert mit der Loop-Frequenz (~10 ms).
-    if (currentMode == MANUAL) {
+    if (currentMode == MANUAL || currentMode == EXTRINSIK) {
         // X-Achse Endschalter (NC wiring: pressed == HIGH)
         if (endPressed(END_X_L) || endPressed(END_X_R)) {
             motorAnalogWrite(RPWM_X, 0);

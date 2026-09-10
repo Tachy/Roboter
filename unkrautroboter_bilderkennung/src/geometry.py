@@ -272,92 +272,51 @@ def compute_and_save_extrinsics_from_charuco(
     except Exception:
         gray = None
 
-    # Standard-Charuco-Parameter (wie in calibration.py)
-    SQUARES_X = 10
-    SQUARES_Y = 15
-    SQUARE_MM = 50.0
-    MARKER_MM = 35.0
-    DICT_NAME = "DICT_5X5_1000"
-
+    # Board + Detektion aus dem gemeinsamen Helfer (kein dupliziertes Setup mehr;
+    # calibration.detect_charuco nutzt die moderne CharucoDetector-API).
     try:
+        from . import calibration as _calib
+
         ar = cv2.aruco
-    except Exception:
-        return False, draw, "OpenCV ArUco nicht verfügbar."
+        aruco_dict = _calib.get_aruco_dict()
+        board = _calib.make_charuco_board(aruco_dict)
+        ch_corners, ch_ids, mk_corners, mk_ids = _calib.detect_charuco(
+            gray, aruco_dict, board
+        )
+    except Exception as e:
+        return False, draw, f"ChArUco-Erkennung fehlgeschlagen: {e}"
 
-    try:
-        d_id = getattr(ar, DICT_NAME)
-        aruco_dict = ar.getPredefinedDictionary(d_id)
-    except Exception:
-        return False, draw, "Aruco-Dictionary fehlt."
-
-    # Board erstellen
-    try:
-        if hasattr(ar, "CharucoBoard_create"):
-            board = ar.CharucoBoard_create(
-                SQUARES_X, SQUARES_Y, SQUARE_MM, MARKER_MM, aruco_dict
-            )
-        else:
-            board = ar.CharucoBoard(
-                (SQUARES_X, SQUARES_Y), SQUARE_MM, MARKER_MM, aruco_dict
-            )
-    except Exception:
-        return False, draw, "Charuco-Board konnte nicht erzeugt werden."
-
-    # Marker-Detektion
-    try:
-        if hasattr(ar, "DetectorParameters"):
-            params = ar.DetectorParameters()
-        else:
-            params = ar.DetectorParameters_create()
-        if hasattr(ar, "ArucoDetector"):
-            detector = ar.ArucoDetector(aruco_dict, params)
-            corners, ids, _ = detector.detectMarkers(gray)
-        else:
-            corners, ids, _ = ar.detectMarkers(gray, aruco_dict, parameters=params)
-    except Exception:
-        corners, ids = None, None
-
-    if ids is None or len(ids) == 0:
-        return False, draw, "Keine Marker gefunden."
-
-    # Charuco-Ecken interpolieren
-    ch_corners = None
-    ch_ids = None
-    try:
-        if hasattr(ar, "interpolateCornersCharuco"):
-            _, ch_corners, ch_ids = ar.interpolateCornersCharuco(
-                corners, ids, gray, board
-            )
-    except Exception:
-        ch_corners, ch_ids = None, None
+    if ch_ids is None or len(ch_ids) < 4:
+        return False, draw, "Zu wenige ChArUco-Ecken gefunden."
 
     rvec = None
     tvec = None
     ok_pose = False
-    if ch_corners is not None and ch_ids is not None and len(ch_ids) >= 4:
-        # Bevorzugt: direkte Charuco-Pose
-        if hasattr(ar, "estimatePoseCharucoBoard"):
-            try:
-                retval, rvec, tvec = ar.estimatePoseCharucoBoard(
-                    ch_corners, ch_ids, board, K, D, None, None
-                )
-                ok_pose = bool(retval)
-            except Exception:
-                ok_pose = False
-        # Fallback: solvePnP mit den Charuco-Weltpunkten
-        if not ok_pose:
-            try:
-                imgp = ch_corners.reshape(-1, 2).astype(np.float32)
-                ids_flat = ch_ids.flatten().astype(int)
-                obj_all = board.chessboardCorners  # (N,3)
-                objp = obj_all[ids_flat].reshape(-1, 3).astype(np.float32)
-                flag = getattr(
-                    cv2, "SOLVEPNP_IPPE_SQUARE", getattr(cv2, "SOLVEPNP_ITERATIVE", 0)
-                )
-                ok, rvec, tvec = cv2.solvePnP(objp, imgp, K, D, flags=flag)
-                ok_pose = bool(ok)
-            except Exception:
-                ok_pose = False
+    # Bevorzugt: direkte Charuco-Pose (Legacy-API, falls vorhanden)
+    if hasattr(ar, "estimatePoseCharucoBoard"):
+        try:
+            retval, rvec, tvec = ar.estimatePoseCharucoBoard(
+                ch_corners, ch_ids, board, K, D, None, None
+            )
+            ok_pose = bool(retval)
+        except Exception:
+            ok_pose = False
+    # Fallback (und Standard auf OpenCV >= 4.9): solvePnP mit den ChArUco-Weltpunkten
+    if not ok_pose:
+        try:
+            imgp = np.asarray(ch_corners, dtype=np.float32).reshape(-1, 2)
+            ids_flat = np.asarray(ch_ids).reshape(-1).astype(int)
+            obj_all = board_chessboard_corners_mm(board)  # (N,2), mm
+            objp = np.hstack(
+                [obj_all[ids_flat], np.zeros((len(ids_flat), 1))]
+            ).astype(np.float32)
+            flag = getattr(
+                cv2, "SOLVEPNP_IPPE", getattr(cv2, "SOLVEPNP_ITERATIVE", 0)
+            )
+            ok, rvec, tvec = cv2.solvePnP(objp, imgp, K, D, flags=flag)
+            ok_pose = bool(ok)
+        except Exception:
+            ok_pose = False
 
     if not ok_pose or rvec is None or tvec is None:
         text = "Extrinsik fehlgeschlagen"
@@ -397,3 +356,171 @@ def compute_and_save_extrinsics_from_charuco(
         return False, draw, "Extrinsik: Speichern fehlgeschlagen"
 
     return True, draw, "Extrinsik gespeichert"
+
+
+# ==== Helfer für die mechanik-gekoppelte EXTRINSIK-Kalibrierung ====
+#
+# Idee: Die ChArUco-Erkennung liefert eine robuste Pixel->Board-mm-Homographie
+# (H_board). Die Bürste an bekannten Schlittenpositionen liefert Punktpaare
+# (Board-mm <-> mechanische mm); daraus wird eine 2D-Ähnlichkeitstransformation
+# S bestimmt. H_mech = S ∘ H_board bildet Pixel direkt auf die mechanische
+# X/Y-Achse des Schlittens ab und wird als ground_homography.npz gespeichert.
+
+
+def board_chessboard_corners_mm(board) -> np.ndarray:
+    """Board-mm-Koordinaten (M,2) aller inneren Schachbrett-Ecken (id 0..M-1)."""
+    cc = None
+    if hasattr(board, "getChessboardCorners"):
+        cc = board.getChessboardCorners()
+    elif hasattr(board, "chessboardCorners"):
+        cc = board.chessboardCorners
+    if cc is None:
+        raise ValueError("Board liefert keine chessboardCorners.")
+    cc = np.asarray(cc, dtype=float).reshape(-1, 3)
+    return cc[:, :2]
+
+
+def estimate_board_homography(ch_corners, ch_ids, board) -> Optional[np.ndarray]:
+    """Pixel -> Board-mm-Homographie aus ChArUco-Eckdetektionen.
+
+    ch_corners: (N,1,2) Pixel, ch_ids: (N,1) Ecken-IDs, board: ChArUco-Board.
+    Gibt die 3x3-Homographie zurück oder None (zu wenige Ecken).
+    """
+    if ch_corners is None or ch_ids is None:
+        return None
+    obj_mm = board_chessboard_corners_mm(board)
+    ids = np.asarray(ch_ids).reshape(-1).astype(int)
+    img_pts = np.asarray(ch_corners, dtype=np.float64).reshape(-1, 2)
+    if len(ids) != len(img_pts) or len(img_pts) < 4:
+        return None
+    if ids.min() < 0 or ids.max() >= len(obj_mm):
+        return None
+    dst_mm = obj_mm[ids].astype(np.float64)
+    try:
+        import cv2
+    except Exception:
+        return None
+    # Kleinste-Quadrate über alle Ecken (subpixelgenau, planar) – kein RANSAC.
+    H, _ = cv2.findHomography(img_pts, dst_mm, 0)
+    if H is None:
+        return None
+    return np.asarray(H, dtype=float)
+
+
+def similarity_from_point_pairs(
+    src_xy, dst_xy
+) -> Tuple[np.ndarray, float, float]:
+    """2D-Ähnlichkeitstransformation (Rotation + einheitl. Maßstab + Translation).
+
+    Bildet src_xy (z. B. Board-mm) auf dst_xy (mechanische mm) ab.
+    Rückgabe: (S 2x3, Maßstab, RMS-Residuum in mm).
+    Bei genau einem Punktpaar: reine Translation (Maßstab 1, Residuum 0).
+    """
+    src = np.asarray(src_xy, dtype=float).reshape(-1, 2)
+    dst = np.asarray(dst_xy, dtype=float).reshape(-1, 2)
+    if len(src) != len(dst) or len(src) == 0:
+        raise ValueError("src/dst müssen gleich viele Punkte (>=1) haben.")
+
+    if len(src) == 1:
+        t = dst[0] - src[0]
+        S = np.array([[1.0, 0.0, t[0]], [0.0, 1.0, t[1]]], dtype=float)
+        return S, 1.0, 0.0
+
+    import cv2
+
+    S, _ = cv2.estimateAffinePartial2D(
+        src.reshape(-1, 1, 2), dst.reshape(-1, 1, 2), method=cv2.LMEDS
+    )
+    if S is None:
+        # Fallback: Schwerpunkt-Translation
+        t = dst.mean(axis=0) - src.mean(axis=0)
+        S = np.array([[1.0, 0.0, t[0]], [0.0, 1.0, t[1]]], dtype=float)
+        return S, 1.0, float("nan")
+
+    S = np.asarray(S, dtype=float)
+    scale = float(np.hypot(S[0, 0], S[1, 0]))
+    proj = (S[:, :2] @ src.T).T + S[:, 2]
+    resid = float(np.sqrt(np.mean(np.sum((proj - dst) ** 2, axis=1))))
+    return S, scale, resid
+
+
+def similarity_through_origin(
+    src_meas_xy, dst_xy
+) -> Tuple[np.ndarray, float, float, float]:
+    """Ähnlichkeit board->mech mit Translation FEST 0 (gemeinsamer Ursprung).
+
+    Modell je Messpunkt: A · src_meas_k - u = dst_k, mit
+      A = [[a, -c], [c, a]]  (Rotation + einheitl. Maßstab)
+      u  = A · b             (unbekannter, positionsunabhängiger Mess-Versatz b
+                              zwischen Bürstenspitze und Schwerpunkt der
+                              verdeckten Ecken)
+    Weil der Bediener bei Schlitten-X=0 die Board-Ecke (0,0) unter die Bürste
+    legt, fallen Board- und Mechanik-Ursprung zusammen -> die reale Abbildung
+    ist mech = A · board (ohne Translation). b/u kürzen sich dabei heraus.
+
+    Rückgabe: (A 2x2, Maßstab, Drehwinkel [Grad], RMS-Residuum in mm).
+    Benötigt >= 2 Messpunkte (2 -> exakt, >=3 -> ausgleichend).
+    """
+    P = np.asarray(src_meas_xy, dtype=float).reshape(-1, 2)
+    M = np.asarray(dst_xy, dtype=float).reshape(-1, 2)
+    if len(P) != len(M) or len(P) < 2:
+        raise ValueError("similarity_through_origin: mindestens 2 Punktpaare nötig.")
+
+    rows = []
+    rhs = []
+    for (px, py), (mx, my) in zip(P, M):
+        rows.append([px, -py, -1.0, 0.0])
+        rhs.append(mx)
+        rows.append([py, px, 0.0, -1.0])
+        rhs.append(my)
+    sol, *_ = np.linalg.lstsq(np.asarray(rows), np.asarray(rhs), rcond=None)
+    a, c, ux, uy = (float(v) for v in sol)
+    A = np.array([[a, -c], [c, a]], dtype=float)
+
+    proj = (A @ P.T).T - np.array([ux, uy])
+    resid = float(np.sqrt(np.mean(np.sum((proj - M) ** 2, axis=1))))
+    scale = float(np.hypot(a, c))
+    theta_deg = float(np.degrees(np.arctan2(c, a)))
+    return A, scale, theta_deg, resid
+
+
+def compose_affine_homography(S_2x3, H_3x3) -> np.ndarray:
+    """S ∘ H: hängt die Affin-/Ähnlichkeitstransformation S (2x3) an H (3x3) an."""
+    S = np.asarray(S_2x3, dtype=float).reshape(2, 3)
+    H = np.asarray(H_3x3, dtype=float).reshape(3, 3)
+    S3 = np.vstack([S, [0.0, 0.0, 1.0]])
+    return S3 @ H
+
+
+def identify_occluded_corner(
+    detected_ids,
+    board_corners_mm,
+    predicted_board_xy,
+    search_radius_mm: float = 75.0,
+) -> Tuple[Optional[np.ndarray], str]:
+    """Schätzt die Board-mm-Lage der von der Bürste verdeckten Region.
+
+    Unter den *nicht* erkannten inneren ChArUco-Ecken werden alle betrachtet,
+    die innerhalb search_radius_mm um die Vorhersage (predicted_board_xy,
+    Board-mm) liegen. Zurückgegeben wird ihr Schwerpunkt (die Bürste verdeckt
+    real ein ganzes Nest an Ecken – der Schwerpunkt ist ein deutlich besserer
+    Positions-Proxy als die einzelne nächste Ecke).
+    Rückgabe: (Board-mm (2,) oder None, Klartext-Info).
+    """
+    corners = np.asarray(board_corners_mm, dtype=float).reshape(-1, 2)
+    seen = set(np.asarray(detected_ids).reshape(-1).astype(int).tolist())
+    pred = np.asarray(predicted_board_xy, dtype=float).reshape(2)
+
+    missing = [i for i in range(len(corners)) if i not in seen]
+    if not missing:
+        return None, "keine verdeckte Ecke (alle erkannt)"
+
+    d = np.array([np.hypot(*(corners[i] - pred)) for i in missing])
+    near = [missing[k] for k in range(len(missing)) if d[k] <= search_radius_mm]
+    if not near:
+        return None, (
+            f"nächste fehlende Ecke {d.min():.0f} mm entfernt "
+            f"(> {search_radius_mm:.0f} mm)"
+        )
+    centroid = corners[near].mean(axis=0)
+    return centroid, f"{len(near)} verdeckte Ecke(n), Schwerpunkt genutzt"

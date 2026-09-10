@@ -43,7 +43,19 @@ def make_charuco_board(aruco_dict):
 
 
 def detect_charuco(gray, aruco_dict, board):
+    """Erkennt ChArUco-Ecken. Rückgabe: (ch_corners, ch_ids, mk_corners, mk_ids).
+
+    Bevorzugt die moderne `CharucoDetector`-API (OpenCV >= 4.7); fällt sonst auf
+    `detectMarkers` + `interpolateCornersCharuco` zurück (< 4.9). Ab OpenCV 4.9
+    existiert `interpolateCornersCharuco` nicht mehr – ohne `CharucoDetector`
+    gäbe es dann gar keine ChArUco-Ecken.
+    """
     ar = cv2.aruco
+    if hasattr(ar, "CharucoDetector"):
+        detector = ar.CharucoDetector(board)
+        ch_corners, ch_ids, mk_corners, mk_ids = detector.detectBoard(gray)
+        return ch_corners, ch_ids, mk_corners, mk_ids
+
     if hasattr(ar, "DetectorParameters"):
         params = ar.DetectorParameters()
     else:
@@ -208,6 +220,201 @@ class CalibrationSession:
         except Exception:
             pass
         return OUT_FILE, ret
+
+    def stop(self):
+        pass
+
+
+# Ausgabedatei der mechanik-gekoppelten EXTRINSIK-Kalibrierung.
+GROUND_H_FILE = OUT_DIR / "ground_homography.npz"
+
+
+class ExtrinsicSession:
+    """Mechanik-gekoppelte EXTRINSIK-Kalibrierung.
+
+    Der Bediener legt bei Schlitten-X=0 die Board-Ecke (0,0) unter die Bürste und
+    richtet die Board-X-Achse grob längs der Spindel aus. An jeder Zielposition
+    verdeckt die Bürste ein Nest innerer ChArUco-Ecken; deren Schwerpunkt in
+    Board-mm ist der Positions-Proxy. Alle Positionen werden gleich gemessen –
+    der konstante Versatz Schwerpunkt<->Bürstenspitze ist damit Gleichtakt und
+    geht sauber in die Translation der Ähnlichkeitstransformation ein, während
+    Drehung und Maßstab aus den *relativen* Lagen der Schwerpunkte kommen.
+
+    Aus den Punktpaaren (Board-mm <-> mechanische mm) wird eine
+    Ähnlichkeitstransformation S bestimmt und mit der Board-Homographie H_board
+    zu H_mech = S ∘ H_board verkettet (Pixel -> mechanik-mm) und als
+    ground_homography.npz gespeichert.
+    """
+
+    # targets_mm[0] ist die Nullpunkt-Aufnahme (Bürste auf Board-Ecke (0,0) bei
+    # Schlitten-X=0), der Rest sind Messpositionen. Drei Messpositionen (statt
+    # der minimalen zwei) geben 2 Freiheitsgrade -> ein aussagekräftiges
+    # Residuum als Qualitätsmaß für die fertige Kalibrierung.
+    def __init__(
+        self,
+        targets_mm=(0.0, 150.0, 290.0, 440.0),
+        search_radius_mm: float = 120.0,
+    ):
+        self.targets_mm = [float(x) for x in targets_mm]
+        self.target = len(self.targets_mm)
+        self.search_radius_mm = float(search_radius_mm)
+        ensure_aruco_support()
+        self.aruco_dict = get_aruco_dict()
+        self.board = make_charuco_board(self.aruco_dict)
+        from . import geometry
+
+        self._corners_mm = geometry.board_chessboard_corners_mm(self.board)
+        self.captures = []  # dicts: mech_xy, board_xy, H_board, n_ch
+        self.count = 0
+        self.last_scale = float("nan")
+        self.last_residual = float("nan")
+
+    # ------------------------------------------------------------------ #
+    def _detect(self, bgr):
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        return detect_charuco(gray, self.aruco_dict, self.board)
+
+    def _preview(self, bgr, mk_corners, mk_ids, mark_px=None):
+        draw = bgr.copy()
+        try:
+            if mk_ids is not None and len(mk_ids) > 0:
+                cv2.aruco.drawDetectedMarkers(draw, mk_corners, mk_ids)
+            if mark_px is not None:
+                p = (int(round(mark_px[0])), int(round(mark_px[1])))
+                cv2.circle(draw, p, 14, (0, 0, 255), 3)
+                cv2.drawMarker(draw, p, (0, 0, 255), cv2.MARKER_CROSS, 26, 2)
+        except Exception:
+            pass
+        return draw
+
+    def _px_of_board_xy(self, H_board, board_xy):
+        """Board-mm -> Pixel über die Inverse der Board-Homographie."""
+        try:
+            Hi = np.linalg.inv(np.asarray(H_board, dtype=float))
+        except Exception:
+            return None
+        v = Hi @ np.array([board_xy[0], board_xy[1], 1.0])
+        if abs(v[2]) < 1e-9:
+            return None
+        return (float(v[0] / v[2]), float(v[1] / v[2]))
+
+    # ------------------------------------------------------------------ #
+    def capture(self, bgr, mech_x_mm: float, is_origin: bool = False):
+        """Ein Bild an mechanischer Position mech_x_mm auswerten.
+
+        is_origin: True für die erste Aufnahme bei Schlitten-X=0, bei der der
+        Bediener die Bürste auf die Board-Ecke (0,0) gesetzt hat. Ihre wahre
+        Board-Lage ist damit (0,0); daraus wird der konstante Versatz zwischen
+        Bürstenspitze und Schwerpunkt der verdeckten Ecken bestimmt und von
+        allen Aufnahmen abgezogen (siehe finalize()).
+
+        Rückgabe: (ok: bool, msg: str, preview_bgr)
+        """
+        from . import geometry
+
+        if bgr is None:
+            return False, "kein Kamerabild", None
+        ch_corners, ch_ids, mk_corners, mk_ids = self._detect(bgr)
+        n_ch = 0 if ch_ids is None else len(ch_ids)
+        if n_ch < 8:
+            return (
+                False,
+                f"Board nicht ausreichend erkannt ({n_ch} Ecken)",
+                self._preview(bgr, mk_corners, mk_ids),
+            )
+
+        H_board = geometry.estimate_board_homography(ch_corners, ch_ids, self.board)
+        if H_board is None:
+            return False, "Board-Homographie fehlgeschlagen", self._preview(
+                bgr, mk_corners, mk_ids
+            )
+
+        predicted = np.array([float(mech_x_mm), 0.0])
+        board_xy_meas, info = geometry.identify_occluded_corner(
+            ch_ids, self._corners_mm, predicted, self.search_radius_mm
+        )
+        if board_xy_meas is None:
+            return (
+                False,
+                f"Bürsten-Position bei X={mech_x_mm:.0f} nicht bestimmbar: {info}",
+                self._preview(bgr, mk_corners, mk_ids),
+            )
+        tag = "Nullpunkt (0,0), " if is_origin else ""
+        msg = f"X={mech_x_mm:.0f} mm: {tag}{info}"
+
+        self.captures.append(
+            {
+                "mech_xy": np.array([float(mech_x_mm), 0.0]),
+                "board_xy_meas": np.asarray(board_xy_meas, dtype=float).reshape(2),
+                "is_origin": bool(is_origin),
+                "H_board": np.asarray(H_board, dtype=float),
+                "n_ch": int(n_ch),
+            }
+        )
+        self.count += 1
+        mark_px = self._px_of_board_xy(H_board, board_xy_meas)
+        return True, msg, self._preview(bgr, mk_corners, mk_ids, mark_px)
+
+    # ------------------------------------------------------------------ #
+    def finalize(self):
+        """Aus den gesammelten Punktpaaren H_mech berechnen und speichern.
+
+        Rückgabe: (Pfad, RMS-Residuum in mm).
+        """
+        from . import geometry
+
+        if len(self.captures) < 1:
+            raise RuntimeError("Keine verwertbare Position aufgenommen.")
+
+        interior = [c for c in self.captures if not c["is_origin"]]
+        has_origin = any(c["is_origin"] for c in self.captures)
+        best = max(self.captures, key=lambda c: c["n_ch"])
+
+        if has_origin and len(interior) >= 2:
+            # Bevorzugt: Translation fest 0 (gemeinsamer Ursprung), der
+            # konstante Mess-Versatz kürzt sich heraus.
+            P = np.array([c["board_xy_meas"] for c in interior])
+            M = np.array([c["mech_xy"] for c in interior])
+            A, scale, theta_deg, resid = geometry.similarity_through_origin(P, M)
+            S = np.hstack([A, np.zeros((2, 1))])
+            method = "through_origin"
+        else:
+            # Rückfall: volle Ähnlichkeit aus allen Punkten (Versatz nicht
+            # korrigiert -> ggf. systematischer Rest).
+            src = np.array([c["board_xy_meas"] for c in self.captures])
+            dst = np.array([c["mech_xy"] for c in self.captures])
+            S, scale, resid = geometry.similarity_from_point_pairs(src, dst)
+            theta_deg = float(np.degrees(np.arctan2(S[1, 0], S[0, 0])))
+            method = "full_similarity_fallback"
+
+        H_mech = geometry.compose_affine_homography(S, best["H_board"])
+
+        self.last_scale = float(scale)
+        self.last_residual = float(resid)
+        self.last_theta_deg = float(theta_deg)
+        self.last_method = method
+
+        np.savez(
+            GROUND_H_FILE,
+            H=H_mech,
+            residual_mm=float(resid),
+            scale=float(scale),
+            theta_deg=float(theta_deg),
+            method=method,
+            n_points=int(len(self.captures)),
+            n_interior=int(len(interior)),
+            has_origin=bool(has_origin),
+            mech_x_mm=np.array([float(c["mech_xy"][0]) for c in self.captures]),
+            board_xy_meas_mm=np.array([c["board_xy_meas"] for c in self.captures]),
+            board_squares=(SQUARES_X, SQUARES_Y),
+            square_mm=SQUARE_MM,
+            note="EXTRINSIK: Pixel->mechanik-mm (S auf H_board); Boden Z=0",
+        )
+        try:
+            geometry.load_homography(str(GROUND_H_FILE))
+        except Exception:
+            pass
+        return GROUND_H_FILE, resid
 
     def stop(self):
         pass

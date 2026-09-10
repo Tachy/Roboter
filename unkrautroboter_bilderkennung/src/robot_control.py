@@ -18,7 +18,7 @@ from . import (
     status_ws_server,
     status_bus,
 )
-from .calibration import CalibrationSession
+from .calibration import CalibrationSession, ExtrinsicSession
 from . import geometry
 import subprocess
 import shutil
@@ -108,6 +108,10 @@ class RobotControl:
         self.last_joystick = {"x": 0, "y": 0}
         self.last_joystick_lock = threading.Lock()
         self.calib_session = None
+        # EXTRINSIK: Session + Flag, das den Serial-Poller der Hauptschleife
+        # pausiert, während die Kalibriersequenz die serielle Leitung besitzt.
+        self.extr_session = None
+        self._extr_seq_active = False
         # GETXY (Bildaufnahme + YOLO) läuft in einem eigenen Thread, damit die
         # Hauptschleife nicht bis zu YOLO_TIMEOUT_SEC blockiert (M5).
         self._getxy_thread = None
@@ -154,10 +158,28 @@ class RobotControl:
                 except Exception as e:
                     pass
                 self.calib_session = None
-            # Beim Wechsel in EXTRINSIK: Bannerbild in Vorschau
+            if self.extr_session is not None:
+                try:
+                    self.extr_session.stop()
+                except Exception:
+                    pass
+                self.extr_session = None
+            # Beim Wechsel in EXTRINSIK: Session anlegen + Hinweis anzeigen
             try:
-                if self.mode == "EXTRINSIK" and camera.is_camera_started():
-                    _capture_preview("Extrinsik: Klick zum Starten")
+                if self.mode == "EXTRINSIK":
+                    try:
+                        self.extr_session = ExtrinsicSession()
+                    except Exception as e:
+                        self.extr_session = None
+                        logger.warning(f"[Extr] Session-Init fehlgeschlagen: {e}")
+                    status_bus.set_message(
+                        "Extrinsik: Board mit Ecke (0,0) unter die Bürste legen, "
+                        "dann 'Bild aufnehmen'"
+                    )
+                    if camera.is_camera_started():
+                        _capture_preview(
+                            "Extrinsik: Board (0,0) unter die Bürste, dann 'Bild aufnehmen'"
+                        )
                 # Beim Wechsel in DISTORTION: Erste Phase ohne Klick starten und Status setzen
                 if self.mode == "DISTORTION":
                     # Kalibriersession anlegen
@@ -182,6 +204,11 @@ class RobotControl:
 
     def process_auto_mode(self):
         """Verarbeitet die automatische Steuerung."""
+        # Während der EXTRINSIK-Sequenz besitzt deren Worker die serielle
+        # Leitung (wartet gezielt auf XREACHED/FAULT). Hier nichts lesen, sonst
+        # würde die Antwort hier konsumiert und verworfen.
+        if self._extr_seq_active:
+            return
         line = self.serial.read_line()
         if line == "WAITING":
             logger.info("<- Arduino: WAITING")
@@ -364,43 +391,100 @@ class RobotControl:
                 )
 
     def extrinsic_button_pressed(self):
-        """One-Shot-Extrinsik: im EXTRINSIK-Modus genau ein Bild auswerten und R,t speichern."""
+        """Startet die mechanik-gekoppelte EXTRINSIK-Sequenz (ein Klick genügt).
+
+        Der Schlitten fährt automatisch die Zielpositionen an
+        (ExtrinsicSession.targets_mm), an jeder wird ein Bild ausgewertet; am
+        Ende wird ground_homography.npz geschrieben.
+        """
         if self.get_mode() != "EXTRINSIK":
             return
         if not camera.is_camera_started():
             logging.info("[Extr] Klick ignoriert: Kamera/Stream nicht aktiv.")
             return
-        # Lade Intrinsik (K,D,newK) aus Kalibrierungsdatei
-        try:
-            calib_path = Path("./calibration/cam_calib_charuco.npz")
-            if not calib_path.exists():
-                raise FileNotFoundError("Kein cam_calib_charuco.npz vorhanden.")
-            d = np.load(str(calib_path), allow_pickle=True)
-            K = d["K"].astype(float)
-            D = d["D"].astype(float)
-            newK = d.get("newK")
-            if newK is not None:
-                newK = newK.astype(float)
-        except Exception:
-            # Fehlerbanner: keine K/D
-            _capture_preview("Extrinsik: Keine K/D gefunden")
+        if self._extr_seq_active:
+            logging.info("[Extr] Sequenz läuft bereits – Klick ignoriert.")
             return
+        if self.extr_session is None:
+            try:
+                self.extr_session = ExtrinsicSession()
+            except Exception as e:
+                _capture_preview(f"Extrinsik: Init fehlgeschlagen ({e})")
+                return
+        self._extr_seq_active = True
+        threading.Thread(
+            target=self._run_extrinsic_sequence, name="extr-seq", daemon=True
+        ).start()
 
-        # Bild holen
+    def _run_extrinsic_sequence(self):
+        """Worker: Schlitten an jede Zielposition fahren, Bild auswerten,
+        anschließend finalisieren. Besitzt währenddessen die serielle Leitung
+        (process_auto_mode pausiert über self._extr_seq_active)."""
         try:
-            bgr = _to_bgr(camera.picam2.capture_array())
-            if bgr is None:
-                raise RuntimeError("Kein Kamerabild verfügbar.")
-        except Exception:
-            return
+            sess = self.extr_session
+            if sess is None:
+                return
+            n = len(sess.targets_mm)
+            for idx, tgt in enumerate(sess.targets_mm):
+                if self.get_mode() != "EXTRINSIK":
+                    status_bus.set_message("Extrinsik: abgebrochen (Moduswechsel)")
+                    return
+                status_bus.set_message(
+                    f"Extrinsik {idx + 1}/{n}: fahre Schlitten auf X={tgt:.0f} mm ..."
+                )
+                self.send_command(f"GOTOX:{tgt:.0f}")
+                line = self.serial.wait_for(("XREACHED:", "FAULT:"), timeout=45.0)
+                if line is None:
+                    status_bus.set_message(
+                        f"Extrinsik: keine Arduino-Antwort bei X={tgt:.0f} – abgebrochen"
+                    )
+                    return
+                if line.startswith("FAULT"):
+                    status_bus.set_message(
+                        f"Extrinsik: {line} bei X={tgt:.0f} – abgebrochen"
+                    )
+                    return
+                try:
+                    actual_x = float(line.split(":", 1)[1])
+                except (ValueError, IndexError):
+                    actual_x = float(tgt)
 
-        # Extrinsik schätzen und speichern via geometry
-        ok, draw, text = geometry.compute_and_save_extrinsics_from_charuco(
-            bgr, K, D, newK=newK
-        )
+                time.sleep(0.5)  # Nachschwingen der Mechanik abklingen lassen
+                bgr = _to_bgr(camera.picam2.capture_array())
+                ok, msg, preview = sess.capture(bgr, actual_x, is_origin=(idx == 0))
+                _publish_preview(
+                    preview if preview is not None else bgr,
+                    text=f"Extrinsik {sess.count}/{n} (X={actual_x:.0f}): {msg}",
+                )
+                if not ok:
+                    logger.warning(f"[Extr] Position {idx + 1} (X={actual_x:.0f}): {msg}")
 
-        # Preview/Banner schreiben (draw ist bereits BGR)
-        _publish_preview(draw, text=text)
+            try:
+                path, resid = sess.finalize()
+                status_bus.set_message(
+                    f"Extrinsik gespeichert: {sess.count} Pos., Residuum {resid:.1f} mm, "
+                    f"Maßstab {sess.last_scale:.3f} [{sess.last_method}]"
+                )
+                logger.info(
+                    f"[Extr] {path} resid={resid:.2f} mm scale={sess.last_scale:.4f} "
+                    f"theta={sess.last_theta_deg:.2f}° method={sess.last_method}"
+                )
+            except Exception as e:
+                status_bus.set_message(f"Extrinsik fehlgeschlagen: {e}")
+                logger.exception("[Extr] finalize fehlgeschlagen")
+
+            # Schlitten zurück in die Parkposition (MITTEX = 220 mm)
+            self.send_command("GOTOX:220")
+            self.serial.wait_for(("XREACHED:", "FAULT:"), timeout=45.0)
+        except Exception as e:
+            logger.exception(f"[Extr] Sequenzfehler: {e}")
+            try:
+                status_bus.set_message(f"Extrinsik-Sequenzfehler: {e}")
+            except Exception:
+                pass
+        finally:
+            self._extr_seq_active = False
+            self.extr_session = None
 
     def get_joystick_status(self):
         with self.last_joystick_lock:

@@ -177,6 +177,32 @@ class SerialManager:
         except queue.Empty:
             return None
 
+    def wait_for(self, prefixes, timeout: float = 30.0):
+        """Blockiert, bis eine empfangene Zeile mit einem der Präfixe beginnt,
+        oder bis das Timeout (Sekunden) abläuft.
+
+        Nicht passende Zeilen (z. B. STATUS:-JSON, das in _dispatch_line bereits
+        an den status_bus übergeben wurde) werden dabei verworfen. Gibt die
+        passende Zeile zurück oder None bei Timeout.
+
+        Nur für Sonderabläufe gedacht, in denen die Hauptschleife das Lesen
+        pausiert (EXTRINSIK-Sequenz) – sonst konkurriert dieser Aufruf mit
+        read_line() um dieselbe Queue.
+        """
+        if isinstance(prefixes, str):
+            prefixes = (prefixes,)
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                line = self.received_lines.get(timeout=min(0.25, remaining))
+            except queue.Empty:
+                continue
+            if any(line.startswith(p) for p in prefixes):
+                return line
+
     def close(self):
         """Beendet den Lese-Thread und schließt die serielle Verbindung."""
         self.running = False
