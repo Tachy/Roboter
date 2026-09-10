@@ -249,10 +249,17 @@ class ExtrinsicSession:
     # targets_mm[0] ist die Nullpunkt-Aufnahme (Bürste auf Board-Ecke (0,0) bei
     # Schlitten-X=0), der Rest sind Messpositionen. Drei Messpositionen (statt
     # der minimalen zwei) geben 2 Freiheitsgrade -> ein aussagekräftiges
-    # Residuum als Qualitätsmaß für die fertige Kalibrierung.
+    # Residuum als Qualitätsmaß.
+    #
+    # WICHTIG: Die Messpositionen müssen deutlich INNERHALB des Boards liegen.
+    # Am Board-Rand fehlen auf einer Seite die Ecken -> der Schwerpunkt des
+    # verdeckten Ecken-Nests wird nach innen gezogen (im Feldtest: bei X=440,
+    # ~60 mm vom fernen 500-mm-Rand, las das Board nur ~410 mm -> Maßstab 1,11).
+    # 380 mm hält ~120 mm Abstand zum fernen Rand; die Nullpunkt-Aufnahme darf
+    # am Eck-Rand kleben, sie geht nicht in den Fit ein.
     def __init__(
         self,
-        targets_mm=(0.0, 150.0, 290.0, 440.0),
+        targets_mm=(0.0, 120.0, 250.0, 380.0),
         search_radius_mm: float = 120.0,
     ):
         self.targets_mm = [float(x) for x in targets_mm]
