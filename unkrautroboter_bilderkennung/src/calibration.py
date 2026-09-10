@@ -23,6 +23,10 @@ DISTORTION_SQUARES_X, DISTORTION_SQUARES_Y = config.DISTORTION_BOARD_SQUARES
 DISTORTION_SQUARE_MM = float(config.DISTORTION_BOARD_SQUARE_MM)
 DISTORTION_MARKER_MM = float(config.DISTORTION_BOARD_MARKER_MM)
 
+# 7x5-Board -> max. 6x4 = 24 innere Ecken. Aufnahmen mit weniger als so vielen
+# erkannten Ecken werden im DISTORTION-Modus verworfen (Board nicht voll/scharf).
+MIN_CHARUCO_PER_SNAPSHOT = 16
+
 OUT_DIR = Path("./calibration")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 OUT_FILE = OUT_DIR / "cam_calib_charuco.npz"
@@ -171,14 +175,19 @@ class CalibrationSession:
         if bgr is None:
             return False, (0, 0)
         ch_corners, ch_ids, mk_corners, mk_ids, counts = self._detect_on_frame(bgr)
-        # speichern
-        if ch_corners is not None and ch_ids is not None:
-            self.all_ch_corners.append(ch_corners)
-            self.all_ch_ids.append(ch_ids)
-            self.marker_snapshots.append((mk_corners, mk_ids, self.board))
-        else:
-            self.marker_snapshots.append((mk_corners, mk_ids, self.board))
-        # Zähler hoch
+
+        # Schwache Aufnahmen verwerfen (Board nicht voll/scharf im Bild) – sie
+        # verschlechtern die Intrinsik. Der Bediener muss die Pose neu nehmen.
+        n_ch = counts[1]
+        if n_ch < MIN_CHARUCO_PER_SNAPSHOT:
+            status_bus.set_message(
+                f"Aufnahme verworfen: nur {n_ch} Ecken – Board voll & scharf ins Bild"
+            )
+            return False, counts
+
+        self.all_ch_corners.append(ch_corners)
+        self.all_ch_ids.append(ch_ids)
+        self.marker_snapshots.append((mk_corners, mk_ids, self.board))
         self.snapshots += 1
 
         # Mini-Vorschau mit Hinweis "Aufnahme X/Y" an Webserver schicken
