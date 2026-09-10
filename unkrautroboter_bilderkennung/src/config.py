@@ -41,15 +41,17 @@ YOLO_CONF = 0.25  # Konfidenzschwelle
 YOLO_IOU = 0.45  # IoU-Schwelle
 
 # Camera Setup
-# Auflösung des MJPEG-Streams / der Live-Vorschau (16:9).
+# EIN Kamera-Modus mit zwei Ausgängen (kein Mode-Switch -> Stream reißt nie ab):
+#  - main  = CAPTURE_RESOLUTION: alle Einzelbilder (GETXY, EXTRINSIK, DISTORTION,
+#            Training) in voller IMX477-Auflösung 4056x3040.
+#  - lores = CAMERA_RESOLUTION:  läuft durchgehend als MJPEG-Stream/Vorschau.
+CAPTURE_RESOLUTION = (4056, 3040)
 CAMERA_RESOLUTION = (1280, 720)
-# Einzelaufnahmen holen sich per Mode-Switch eine native IMX477-Auflösung (4:3,
-# voller Bildwinkel). GETXY/Training: 2:1 gebinnt (flott); EXTRINSIK: volle
-# 12 MP für subpixelgenaue ChArUco-Ecken. 2028x1520 ist exakt der halbe
-# Pixelraster von 4056x3040 -> GETXY-Pixel werden fürs Polynom automatisch auf
-# die EXTRINSIK-Referenzauflösung hochskaliert (ref_wh in ground_poly.npz).
+# EXTRINSIK nutzt die volle `main`-Auflösung (subpixelgenaue Ecken). GETXY wird
+# aus `main` auf diese Größe heruntergerechnet (kleine, schnelle PNGs); das
+# Polynom skaliert die Pixel über ref_wh automatisch hoch.
+STILL_RESOLUTION_EXTRINSIK = CAPTURE_RESOLUTION
 STILL_RESOLUTION_GETXY = (2028, 1520)
-STILL_RESOLUTION_EXTRINSIK = (4056, 3040)
 
 # Kleines ChArUco-Board NUR für den DISTORTION-Modus (K, D). Passt quer auf A4
 # (7x35 = 245 mm x 5x35 = 175 mm) und lässt sich plan aufziehen. Dictionary =

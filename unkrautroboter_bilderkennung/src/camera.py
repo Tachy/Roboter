@@ -318,16 +318,23 @@ def get_last_capture_timestamp():
 
 
 def start_stream():
-    """Startet den Video-Stream (Hardware-MJPEG, keine Undistortion)."""
+    """Startet den MJPEG-Stream auf dem `lores`-Ausgang (Hardware-Encoder).
+    `main` (Vollauflösung) bleibt parallel für Einzelbilder verfügbar."""
     global stream_active
     try:
         if not stream_active:
             if not picam2.started:
                 picam2.start()
                 time.sleep(0.5)
-            picam2.start_recording(MJPEGEncoder(), FileOutput(stream_output))
+            try:
+                picam2.start_recording(
+                    MJPEGEncoder(), FileOutput(stream_output), name="lores"
+                )
+            except TypeError:
+                # ältere picamera2 ohne name= -> encode="lores" aus der Config greift
+                picam2.start_recording(MJPEGEncoder(), FileOutput(stream_output))
             stream_active = True
-            logger.info("Stream (Hardware MJPEG) aktiviert.")
+            logger.info("Stream (Hardware MJPEG / lores) aktiviert.")
     except Exception as e:
         logger.error(f"Fehler beim Starten des Streams: {str(e)}")
         stream_active = False
@@ -446,10 +453,15 @@ def start_http_server():
     server.serve_forever()
 
 
-# Kamera-Setup
+# Kamera-Setup: EIN Modus, zwei Ausgänge.
+#  main  -> Einzelbilder in voller Auflösung
+#  lores -> MJPEG-Stream (läuft durchgehend, wird nie umgeschaltet)
 picam2 = Picamera2()
 _video_config = picam2.create_video_configuration(
-    main={"size": config.CAMERA_RESOLUTION}
+    main={"size": tuple(config.CAPTURE_RESOLUTION)},
+    lores={"size": tuple(config.CAMERA_RESOLUTION)},
+    encode="lores",
+    buffer_count=4,
 )
 picam2.configure(_video_config)
 stream_output = MJPEGOutput()
@@ -467,37 +479,25 @@ def _arr_to_bgr(arr):
     return arr
 
 
-def capture_still_array(size, n: int = 1, settle: float = 0.4):
-    """Holt n Bilder in nativer Auflösung `size` (Mode-Switch), danach zurück auf
-    die Video-Konfiguration. Der Stream wird dafür kurz gestoppt und wieder
-    gestartet.
+def capture_still_array(size=None, n: int = 1):
+    """Holt n Bilder vom `main`-Stream (volle Auflösung). KEIN Mode-Switch – der
+    MJPEG-Stream (`lores`) läuft ununterbrochen weiter.
 
+    size: nur zum optionalen Runterskalieren; None/Vollauflösung -> unverändert.
     Rückgabe: BGR-ndarray (n == 1) oder Liste von BGR-ndarrays.
-    Wirft bei Fehlschlag -> Aufrufer entscheidet (kein stiller Fallback auf
-    Stream-Auflösung, sonst passt das kalibrierte Polynom nicht).
+    Wirft bei Fehlschlag.
     """
     ensure_camera_started()
-    was_streaming = stream_active
     frames = []
-    try:
-        if was_streaming:
-            stop_stream()
-        still_cfg = picam2.create_still_configuration(main={"size": tuple(size)})
-        picam2.switch_mode(still_cfg)
-        time.sleep(settle)
-        for i in range(max(1, n)):
-            frames.append(_arr_to_bgr(picam2.capture_array("main")))
-            if i + 1 < n:
-                time.sleep(0.12)
-    finally:
-        try:
-            picam2.switch_mode(_video_config)
-        except Exception as e:
-            logger.error(f"Zurückschalten auf Video-Konfiguration fehlgeschlagen: {e}")
-        if was_streaming:
-            start_stream()
-    if not frames or any(f is None for f in frames):
-        raise RuntimeError(f"Still-Aufnahme {tuple(size)} lieferte kein Bild")
+    for i in range(max(1, n)):
+        bgr = _arr_to_bgr(picam2.capture_array("main"))
+        if bgr is None:
+            raise RuntimeError("capture_array('main') lieferte kein Bild")
+        if size is not None:
+            tw, th = int(size[0]), int(size[1])
+            if (bgr.shape[1], bgr.shape[0]) != (tw, th):
+                bgr = cv2.resize(bgr, (tw, th), interpolation=cv2.INTER_AREA)
+        frames.append(bgr)
     return frames[0] if n == 1 else frames
 
 # Keine Software-Stream-Schleife mehr
