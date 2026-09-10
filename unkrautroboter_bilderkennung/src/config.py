@@ -74,6 +74,11 @@ FW_RESET_POST_PULSE_WAIT = 0.1
 # Beispiel: WORLD_OFFSET_XY_MM = (x_mm, y_mm) – wird von pixel_to_world subtrahiert
 WORLD_OFFSET_XY_MM = (0.0, 0.0)
 
+# EXTRINSIK: Grad des Pixel->mm-Polynoms ("Kurvenmatrix"), das die Extrinsik aus
+# Pose + K/D backt und als ground_poly.npz speichert. 3 reicht für normale
+# Objektive; finalize hebt bei zu großem Fit-Residuum selbst auf 4 an.
+EXTRINSIK_POLY_DEGREE = 3
+
 # EXTRINSIK: Anzahl der Kamerabilder, die pro Kalibrierung gepoolt werden.
 # Kamera sitzt auf der X-Achse; die Aufnahme erfolgt bei X=220 (MITTEX = die
 # spätere AUTO-Aufnahmeposition), Board + Kamera stehen dabei still -> eins

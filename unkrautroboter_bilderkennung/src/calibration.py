@@ -226,37 +226,51 @@ class CalibrationSession:
 
 
 # Ausgabedateien der EXTRINSIK-Kalibrierung.
-GROUND_H_FILE = OUT_DIR / "ground_homography.npz"
-EXTR_FILE = OUT_DIR / "extrinsics.npz"
+POLY_FILE = OUT_DIR / "ground_poly.npz"      # Laufzeit-Artefakt (Rohpixel -> mm)
+EXTR_FILE = OUT_DIR / "extrinsics.npz"       # Debug / Overlay
+GROUND_H_FILE = OUT_DIR / "ground_homography.npz"  # nur noch Legacy-Fallback
 
 
 class ExtrinsicSession:
-    """EXTRINSIK v3 – reine Board-Pose, die Bürste wird nie beobachtet.
+    """EXTRINSIK v3.1 – Rohbild-Pipeline, Ausgabe als Polynom "Kurvenmatrix".
 
-    Voraussetzung (physisch am Gerät hergestellt): der Bediener fährt die Bürste
-    auf Schlitten-X=0, legt die Board-Ecke (0,0) unter den Bürstenmittelpunkt und
-    die Board-X-Achse exakt parallel zur Bürstenfahrt. Damit gilt
-    **Board-mm == mechanische mm** (keine Drehung, kein Versatz, Maßstab 1).
+    Voraussetzung (physisch am Gerät hergestellt): Bürste auf Schlitten-X=0,
+    Board-Ecke (0,0) unter den Bürstenmittelpunkt, Board-X-Achse exakt parallel
+    zur Bürstenfahrt -> **Board-mm == mechanische mm**. Die Aufnahme erfolgt
+    von der Kameraposition X=220 (= spätere AUTO-Aufnahmeposition).
 
-    Die Routine bestimmt nur die Kamerapose aus dem ChArUco-Board (über mehrere
-    Bilder gepoolt) und leitet daraus die Pixel->mm-Homographie ab. Die untere
-    Board-Kante liegt i. d. R. unter dem Bildrand -> die Abbildung extrapoliert
-    bis zur Bürstenlinie; die bekannte Intrinsik (newK) hält das in Form.
+    Ablauf: ChArUco auf den ROHbildern erkennen (mehrere gepoolt) ->
+    cv2.solvePnP(K, D) -> Pose. Dann ein Welt-mm-Gitter über den sichtbaren
+    Board-Bereich per cv2.projectPoints(K, D) auf Rohpixel abbilden und daraus
+    ein Polynom C (Grad ~3) fitten: [X_mm, Y_mm] = Φ(u,v)·C. Laufzeit rechnet
+    dann rein numpy auf Rohpixeln, ohne Entzerrung.
     """
 
     def __init__(self):
         ensure_aruco_support()
         self.aruco_dict = get_aruco_dict()
         self.board = make_charuco_board(self.aruco_dict)
-        from . import geometry
+        from . import geometry, config
 
         self._obj_all_mm = geometry.board_chessboard_corners_mm(self.board)  # (M,2)
-        self.newK = None
-        self.D0 = np.zeros(5)
-        self.img_pts = []  # je Frame: (n,2) Pixel (entzerrt)
+        self.degree = int(getattr(config, "EXTRINSIK_POLY_DEGREE", 3))
+
+        # Rohe Intrinsik K, D aus der DISTORTION-Kalibrierung.
+        self.K = None
+        self.D = np.zeros(5)
+        try:
+            d = np.load("./calibration/cam_calib_charuco.npz", allow_pickle=True)
+            self.K = np.asarray(d["K"], dtype=np.float64)
+            self.D = np.asarray(d["D"], dtype=np.float64).reshape(-1)
+        except Exception:
+            self.K = None
+
+        self.img_pts = []  # je Frame: (n,2) ROHpixel
         self.obj_pts = []  # je Frame: (n,3) Board-mm, Z=0
+        self.img_shape = None  # (h, w) des Rohbilds
         self.n_frames = 0
         self.last_reproj_px = float("nan")
+        self.last_fit_rms_mm = float("nan")
         self.last_R = None
         self.last_t = None
         self.board_x_span = (0.0, 0.0)
@@ -268,24 +282,23 @@ class ExtrinsicSession:
         return np.hstack([xy, np.zeros((len(ids), 1))]).astype(np.float64)
 
     def add_frame(self, bgr_raw):
-        """Rohbild entzerren, ChArUco erkennen, Ecken akkumulieren.
+        """ChArUco im ROHbild erkennen, Ecken akkumulieren (keine Entzerrung).
 
         Rückgabe: (ok: bool, msg: str, preview_bgr).
         """
         if bgr_raw is None:
             return False, "kein Kamerabild", None
-        und, newK = camera.undistort_bgr(bgr_raw)
-        if newK is None:
-            return False, "keine Kamera-Kalibrierung (cam_calib_charuco.npz)", und
-        self.newK = np.asarray(newK, dtype=np.float64)
+        if self.K is None:
+            return False, "keine Kamera-Kalibrierung (cam_calib_charuco.npz)", bgr_raw
+        self.img_shape = bgr_raw.shape[:2]
 
-        gray = cv2.cvtColor(und, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(bgr_raw, cv2.COLOR_BGR2GRAY)
         ch_corners, ch_ids, mk_corners, mk_ids = detect_charuco(
             gray, self.aruco_dict, self.board
         )
         n_ch = 0 if ch_ids is None else len(ch_ids)
 
-        draw = und.copy()
+        draw = bgr_raw.copy()
         try:
             if mk_ids is not None and len(mk_ids) > 0:
                 cv2.aruco.drawDetectedMarkers(draw, mk_corners, mk_ids)
@@ -303,25 +316,25 @@ class ExtrinsicSession:
         return True, f"{n_ch} Ecken", draw
 
     def finalize(self):
-        """Pose aus allen gepoolten Ecken (ein solvePnP), Homographie ableiten,
-        ground_homography.npz + extrinsics.npz schreiben und heiß nachladen.
+        """Pose (solvePnP K,D) -> Welt-Gitter -> Polynom C, ground_poly.npz +
+        extrinsics.npz schreiben und heiß nachladen.
 
-        Rückgabe: (pfad, reproj_err_px).
+        Rückgabe: (pfad, reproj_err_px, fit_rms_mm).
         """
         from . import geometry
 
-        if self.n_frames == 0 or not self.img_pts or self.newK is None:
+        if self.n_frames == 0 or not self.img_pts or self.K is None:
             raise RuntimeError("Keine verwertbare Aufnahme.")
         imgp = np.vstack(self.img_pts)
         objp = np.vstack(self.obj_pts)
 
-        x_span = float(objp[:, 0].max() - objp[:, 0].min())
-        y_span = float(objp[:, 1].max() - objp[:, 1].min())
+        x0, x1 = float(objp[:, 0].min()), float(objp[:, 0].max())
+        y0, y1 = float(objp[:, 1].min()), float(objp[:, 1].max())
+        x_span, y_span = x1 - x0, y1 - y0
         uniq = len(np.unique(np.round(objp[:, :2], 1), axis=0))
 
-        # Abdeckungs-Prüfung: aus zu wenig / zu kleinem Board-Ausschnitt wird die
-        # Pose (und erst recht die Extrapolation bis zur Bürstenlinie) unbrauchbar
-        # -> lieber nichts speichern und den Bediener anleiten.
+        # Abdeckungs-Prüfung: zu wenig / zu kleiner Board-Ausschnitt -> nichts
+        # speichern, den Bediener anleiten.
         if uniq < 40 or x_span < 200.0 or y_span < 150.0:
             raise RuntimeError(
                 f"Board zu wenig im Bild: {uniq} versch. Ecken, sichtbar "
@@ -330,63 +343,99 @@ class ExtrinsicSession:
             )
 
         flag = getattr(cv2, "SOLVEPNP_ITERATIVE", 0)
-        ok, rvec, tvec = cv2.solvePnP(objp, imgp, self.newK, self.D0, flags=flag)
+        ok, rvec, tvec = cv2.solvePnP(objp, imgp, self.K, self.D, flags=flag)
         if not ok:
             raise RuntimeError("solvePnP fehlgeschlagen.")
-
         R, _ = cv2.Rodrigues(rvec)
         t = tvec.reshape(3)
-        proj, _ = cv2.projectPoints(objp, rvec, tvec, self.newK, self.D0)
+
+        proj, _ = cv2.projectPoints(objp, rvec, tvec, self.K, self.D)
         reproj = float(
             np.sqrt(np.mean(np.sum((proj.reshape(-1, 2) - imgp) ** 2, axis=1)))
         )
 
+        # Welt-mm-Gitter über den sichtbaren Board-Bereich (15 % gepolstert),
+        # per projectPoints auf ROHpixel; nur Paare im Bild behalten.
+        px = 0.15 * x_span
+        py = 0.15 * y_span
+        gx = np.linspace(x0 - px, x1 + px, 40)
+        gy = np.linspace(y0 - py, y1 + py, 40)
+        GX, GY = np.meshgrid(gx, gy)
+        world = np.column_stack([GX.ravel(), GY.ravel(), np.zeros(GX.size)])
+        gpx, _ = cv2.projectPoints(world.astype(np.float64), rvec, tvec, self.K, self.D)
+        gpx = gpx.reshape(-1, 2)
+        h, w = self.img_shape if self.img_shape else (720, 1280)
+        m = 40  # etwas über den Bildrand hinaus zulassen
+        inb = (
+            (gpx[:, 0] > -m)
+            & (gpx[:, 0] < w + m)
+            & (gpx[:, 1] > -m)
+            & (gpx[:, 1] < h + m)
+        )
+        gpx, world_xy = gpx[inb], world[inb, :2]
+        if len(gpx) < 50:
+            raise RuntimeError("Zu wenige Gitterpunkte im Bild für den Poly-Fit.")
+
+        degree = self.degree
+        C, rms, mx = geometry.fit_pixel_to_world_poly(gpx, world_xy, degree)
+        if rms > 0.3 and degree < 4:
+            degree = 4
+            C, rms, mx = geometry.fit_pixel_to_world_poly(gpx, world_xy, degree)
+
+        pix_bbox = np.array(
+            [gpx[:, 0].min(), gpx[:, 0].max(), gpx[:, 1].min(), gpx[:, 1].max()]
+        )
+
         self.last_reproj_px = reproj
+        self.last_fit_rms_mm = float(rms)
         self.last_R = R
         self.last_t = t
-        self.board_x_span = (float(objp[:, 0].min()), float(objp[:, 0].max()))
-        self.board_y_span = (float(objp[:, 1].min()), float(objp[:, 1].max()))
-
-        # Board-mm == mechanische mm -> Homographie direkt aus der Pose.
-        H = geometry.homography_from_pose(R, t, self.newK)
+        self.board_x_span = (x0, x1)
+        self.board_y_span = (y0, y1)
 
         np.savez(
-            GROUND_H_FILE,
-            H=H,
-            reproj_err_px=reproj,
+            POLY_FILE,
+            C=C,
+            degree=int(degree),
+            pix_bbox=pix_bbox,
+            fit_rms_mm=float(rms),
+            fit_max_mm=float(mx),
+            reproj_px=float(reproj),
             n_frames=int(self.n_frames),
             n_points=int(len(imgp)),
             board_x_span=np.array(self.board_x_span),
             board_y_span=np.array(self.board_y_span),
-            theta_deg=0.0,
-            scale=1.0,
-            offset_mm=np.array([0.0, 0.0]),
-            note="EXTRINSIK v3: Pixel->mm aus Board-Pose; Board-mm == mechanische mm",
+            R=R,
+            t=t,
+            K=self.K,
+            D=self.D,
+            note="EXTRINSIK v3.1: Polynom ROHpixel->mm; Board-mm == mechanische mm",
         )
         np.savez(
             EXTR_FILE,
-            K=self.newK,
-            newK=self.newK,
+            K=self.K,
+            newK=self.K,
+            D=self.D,
             R=R,
             t=t,
             plane_z0=True,
-            note="EXTRINSIK v3: Pose (entzerrt / newK); Boden Z=0",
+            note="EXTRINSIK v3.1: Pose (ROHbild / K,D); Boden Z=0",
         )
         try:
-            geometry.load_homography(str(GROUND_H_FILE))
+            geometry.load_ground_poly(str(POLY_FILE))
         except Exception:
             pass
-        return GROUND_H_FILE, reproj
+        return POLY_FILE, reproj, float(rms)
 
     def grid_overlay(self, bgr):
-        """BGR-Bild mit dem projizierten mechanischen mm-Raster (Sichtprüfung)."""
+        """ROH-BGR-Bild mit dem projizierten mechanischen mm-Raster."""
         from . import geometry
 
-        if self.last_R is None or self.newK is None:
+        if self.last_R is None or self.K is None:
             return bgr
         try:
             return geometry.draw_mechanical_grid(
-                bgr, self.last_R, self.last_t, self.newK
+                bgr, self.last_R, self.last_t, self.K, D=self.D
             )
         except Exception:
             return bgr

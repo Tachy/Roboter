@@ -169,3 +169,50 @@ def test_homography_from_pose_maps_pixels_back_to_ground_mm():
 
     got = _apply_h(H, px)
     assert np.allclose(got, world, atol=1e-6)
+
+
+# --------------------------------------------------------------------------- #
+# Polynom "Kurvenmatrix" (Rohpixel -> Boden-mm)                                #
+# --------------------------------------------------------------------------- #
+def test_poly_basis_shapes_and_terms():
+    # Grad d -> (d+1)(d+2)/2 Terme
+    for d, n in [(1, 3), (2, 6), (3, 10), (4, 15)]:
+        assert geometry.poly_basis(1.0, 1.0, d).shape == (n,)
+    Phi = geometry.poly_basis(np.array([1.0, 2.0]), np.array([3.0, 4.0]), 2)
+    assert Phi.shape == (2, 6)
+    # Term-Reihenfolge: [1, u, v, u², uv, v²]  bei u=2, v=3
+    assert np.allclose(geometry.poly_basis(2.0, 3.0, 2), [1, 2, 3, 4, 6, 9])
+
+
+def test_fit_and_eval_poly_recovers_distorted_map():
+    cv2 = pytest.importorskip("cv2")
+    K = np.array([[900.0, 0.0, 640.0], [0.0, 900.0, 360.0], [0.0, 0.0, 1.0]])
+    D = np.array([-0.16, 0.04, 0.001, -0.001, 0.0])
+    th = np.deg2rad(22.0)
+    R = np.array(
+        [[1, 0, 0], [0, np.cos(th), -np.sin(th)], [0, np.sin(th), np.cos(th)]]
+    )
+    t = np.array([-25.0, 30.0, 450.0])
+    rvec, _ = cv2.Rodrigues(R)
+
+    # Welt-mm-Gitter -> verzeichnete Rohpixel (Vorwärtsmodell)
+    gx, gy = np.meshgrid(np.linspace(0, 450, 25), np.linspace(80, 500, 25))
+    world = np.column_stack([gx.ravel(), gy.ravel()])
+    px, _ = cv2.projectPoints(
+        np.hstack([world, np.zeros((len(world), 1))]).astype(np.float64),
+        rvec, t.reshape(3, 1), K, D,
+    )
+    px = px.reshape(-1, 2)
+
+    C, rms, mx = geometry.fit_pixel_to_world_poly(px, world, degree=3)
+    assert rms < 0.5  # mm
+    # Auswertung an neuen Punkten (verzeichnet projiziert)
+    test_world = np.array([[100.0, 150.0], [300.0, 250.0], [420.0, 400.0]])
+    tpx, _ = cv2.projectPoints(
+        np.hstack([test_world, np.zeros((3, 1))]).astype(np.float64),
+        rvec, t.reshape(3, 1), K, D,
+    )
+    for (u, v), (X, Y) in zip(tpx.reshape(-1, 2), test_world):
+        gxv, gyv = geometry.eval_pixel_to_world_poly(C, 3, float(u), float(v))
+        assert gxv == pytest.approx(X, abs=1.0)
+        assert gyv == pytest.approx(Y, abs=1.0)

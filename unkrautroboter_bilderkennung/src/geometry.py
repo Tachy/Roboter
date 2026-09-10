@@ -38,6 +38,7 @@ CALIB_DIR = os.path.abspath(
 )
 H_FILE = os.path.join(CALIB_DIR, "ground_homography.npz")
 EXTR_FILE = os.path.join(CALIB_DIR, "extrinsics.npz")
+POLY_FILE = os.path.join(CALIB_DIR, "ground_poly.npz")
 
 # Globale Zustände
 _H: Optional[np.ndarray] = None
@@ -47,6 +48,10 @@ _t: Optional[np.ndarray] = None  # (3,)
 _plane_n: Optional[np.ndarray] = None  # (3,)
 _plane_d: Optional[float] = None
 _plane_is_z0: bool = False
+# "Kurvenmatrix": Polynom Rohpixel -> Boden-mm (bevorzugter Pfad)
+_C: Optional[np.ndarray] = None          # (n_terms, 2)
+_C_degree: int = 0
+_C_bbox: Optional[np.ndarray] = None     # [u_min, u_max, v_min, v_max]
 
 
 def _safe_load_npz(path: str) -> Optional[dict]:
@@ -131,9 +136,43 @@ def load_extrinsics(path: Optional[str] = None) -> bool:
     return True
 
 
+def load_ground_poly(path: Optional[str] = None) -> bool:
+    """Lädt die Pixel->mm-Polynom-"Kurvenmatrix" (Rohbild-Pipeline).
+
+    Erwartet in der npz: 'C' (n_terms, 2), 'degree' (int), optional 'pix_bbox'
+    ([u_min,u_max,v_min,v_max]).
+    """
+    global _C, _C_degree, _C_bbox
+    p = path or POLY_FILE
+    d = _safe_load_npz(p)
+    if not d:
+        return False
+    C = d.get("C")
+    deg = d.get("degree")
+    if C is None or deg is None:
+        logger.warning(f"[Geom] 'C'/'degree' fehlen in {p}.")
+        return False
+    C = np.asarray(C, dtype=float)
+    degree = int(np.asarray(deg).reshape(-1)[0])
+    n_terms = (degree + 1) * (degree + 2) // 2
+    if C.shape != (n_terms, 2):
+        logger.warning(f"[Geom] Ungültige C-Form {C.shape} für Grad {degree} in {p}.")
+        return False
+    _C = C
+    _C_degree = degree
+    bb = d.get("pix_bbox")
+    _C_bbox = None if bb is None else np.asarray(bb, dtype=float).reshape(4)
+    logger.info(f"[Geom] Polynom (Grad {degree}) geladen aus {p}.")
+    return True
+
+
 def is_world_transform_ready() -> bool:
-    """Gibt True zurück, wenn Homographie oder Extrinsik+Ebene geladen sind."""
-    return _H is not None or (_K is not None and _R is not None and _t is not None)
+    """True, wenn Polynom, Homographie oder Extrinsik+Ebene geladen sind."""
+    return (
+        _C is not None
+        or _H is not None
+        or (_K is not None and _R is not None and _t is not None)
+    )
 
 
 def _apply_homography(px: float, py: float) -> Optional[Tuple[float, float]]:
@@ -199,35 +238,45 @@ def _ray_plane_intersection(px: float, py: float) -> Optional[Tuple[float, float
 
 
 def pixel_to_world(px: float, py: float) -> Optional[Tuple[float, float]]:
-    """Konvertiert Pixelkoordinaten (px,py) aus dem UNDISTORTED Bild nach Welt (mm).
+    """Konvertiert Pixelkoordinaten (px,py) nach Welt-mm.
 
-    Priorität: Homographie > Extrinsik+Ebene. Gibt None zurück, wenn nicht möglich.
+    Priorität: Polynom ("Kurvenmatrix", auf ROHpixeln) > Homographie > Extrinsik.
+    Gibt None zurück, wenn nicht möglich. `WORLD_OFFSET_XY_MM` wird abgezogen.
     """
-    # 1) Homographie
+    ox, oy = getattr(config, "WORLD_OFFSET_XY_MM", (0.0, 0.0))
+
+    # 0) Polynom (Rohbild-Pipeline)
+    if _C is not None:
+        if _C_bbox is not None:
+            u0, u1, v0, v1 = _C_bbox
+            m = 0.08 * max(u1 - u0, v1 - v0)  # großzügiger Rand
+            if not (u0 - m <= px <= u1 + m and v0 - m <= py <= v1 + m):
+                logger.debug(
+                    f"[Geom] Pixel ({px:.0f},{py:.0f}) außerhalb Poly-Gültigkeit."
+                )
+                return None
+        X, Y = eval_pixel_to_world_poly(_C, _C_degree, px, py)
+        return float(X - ox), float(Y - oy)
+
+    # 1) Homographie (Legacy)
     if _H is not None:
         res = _apply_homography(px, py)
         if res is not None:
-            ox, oy = getattr(config, "WORLD_OFFSET_XY_MM", (0.0, 0.0))
             return float(res[0] - ox), float(res[1] - oy)
-    # 2) Extrinsik
+    # 2) Extrinsik + Ebene (Legacy)
     if _K is not None and _R is not None and _t is not None:
         res = _ray_plane_intersection(px, py)
         if res is not None:
-            ox, oy = getattr(config, "WORLD_OFFSET_XY_MM", (0.0, 0.0))
             return float(res[0] - ox), float(res[1] - oy)
     return None
 
 
 def try_autoload() -> None:
-    """Versucht beim Start Homographie/Extrinsik zu laden (falls vorhanden)."""
-    loaded = False
-    try:
-        loaded = load_homography()
-    except Exception:
-        pass
-    if not loaded:
+    """Beim Start laden: Polynom > Homographie > Extrinsik (erstes gewinnt)."""
+    for fn in (load_ground_poly, load_homography, load_extrinsics):
         try:
-            load_extrinsics()
+            if fn():
+                return
         except Exception:
             pass
 
@@ -492,6 +541,52 @@ def compose_affine_homography(S_2x3, H_3x3) -> np.ndarray:
     return S3 @ H
 
 
+# ==== "Kurvenmatrix": Polynom Rohpixel -> Boden-mm ====
+
+
+def _poly_terms(degree: int):
+    """(i, j)-Exponenten für u^i * v^j, i+j <= degree. Reihenfolge nach
+    aufsteigendem Gesamtgrad, innerhalb dessen u-Potenz absteigend:
+    [1, u, v, u², uv, v², u³, u²v, uv², v³, …]."""
+    return [(d - i, i) for d in range(degree + 1) for i in range(d + 1)]
+
+
+def poly_basis(u, v, degree: int) -> np.ndarray:
+    """Design-Matrix Φ. u, v skalar oder 1D-Array gleicher Länge.
+    Rückgabe: (N, n_terms) bzw. (n_terms,) bei Skalaren."""
+    u = np.asarray(u, dtype=float)
+    v = np.asarray(v, dtype=float)
+    scalar = (u.ndim == 0)
+    u = np.atleast_1d(u)
+    v = np.atleast_1d(v)
+    cols = [u ** i * v ** j for (i, j) in _poly_terms(degree)]
+    Phi = np.stack(cols, axis=1)  # (N, n_terms)
+    return Phi[0] if scalar else Phi
+
+
+def fit_pixel_to_world_poly(pix_pts, world_pts, degree: int):
+    """Least-Squares-Fit C so, dass Φ(u,v) · C ≈ (X_mm, Y_mm).
+
+    Rückgabe: (C (n_terms, 2), rms_mm, max_mm).
+    """
+    pix = np.asarray(pix_pts, dtype=float).reshape(-1, 2)
+    wld = np.asarray(world_pts, dtype=float).reshape(-1, 2)
+    Phi = poly_basis(pix[:, 0], pix[:, 1], degree)
+    C, *_ = np.linalg.lstsq(Phi, wld, rcond=None)
+    resid = Phi @ C - wld
+    d = np.sqrt(np.sum(resid ** 2, axis=1))
+    return C, float(np.sqrt(np.mean(d ** 2))), float(np.max(d))
+
+
+def eval_pixel_to_world_poly(C, degree: int, u, v):
+    """Wertet das Polynom aus. Rückgabe (X_mm, Y_mm) bzw. (N,2) bei Arrays."""
+    Phi = poly_basis(u, v, degree)
+    out = Phi @ np.asarray(C, dtype=float)
+    if out.ndim == 1:
+        return float(out[0]), float(out[1])
+    return out
+
+
 def homography_from_pose(R, t, K) -> np.ndarray:
     """Pixel -> Boden-mm-Homographie (Ebene Z=0) aus Kamerapose + Intrinsik.
 
@@ -512,13 +607,15 @@ def draw_mechanical_grid(
     R,
     t,
     K,
+    D=None,
     x_lines=(0, 50, 100, 150, 200, 250, 300, 350, 400, 450),
     y_lines=(0, 100, 200, 300, 400),
     color=(0, 200, 0),
 ):
     """Zeichnet ein mechanisches mm-Raster (Sichtprüfung) in ein BGR-Bild.
 
-    Die Linien werden in Welt-mm (Z=0) definiert und über die Pose ins Bild
+    Die Linien werden in Welt-mm (Z=0) definiert und über die Pose (mit
+    Verzeichnung D, falls gegeben -> korrektes Zeichnen im Rohbild) ins Bild
     projiziert; die Y=0-Linie (Bürstenlinie) liegt i. d. R. extrapoliert
     unterhalb der sichtbaren Board-Region.
     """
@@ -530,7 +627,7 @@ def draw_mechanical_grid(
     rvec, _ = cv2.Rodrigues(R)
     tvec = np.asarray(t, dtype=float).reshape(3, 1)
     K = np.asarray(K, dtype=float).reshape(3, 3)
-    zero_d = np.zeros(5)
+    zero_d = np.zeros(5) if D is None else np.asarray(D, dtype=float).reshape(-1)
 
     y0, y1 = float(min(y_lines)), float(max(y_lines))
     x0, x1 = float(min(x_lines)), float(max(x_lines))

@@ -268,9 +268,10 @@ class RobotControl:
                 logger.info("-> Arduino: NOCALIB")
                 return
 
-            # Entzerrtes Einzelbild aufnehmen und verarbeiten (immer undistortiert für GETXY)
+            # ROHbild aufnehmen (keine Entzerrung). YOLO und geometry.pixel_to_world
+            # (Polynom "Kurvenmatrix") arbeiten direkt auf Rohpixeln.
             filename = "frame.jpg"
-            camera.capture_image(filename, undistort=True)
+            camera.capture_image(filename, undistort=False)
             img_path = filename
 
             coords = yolo_detector.process_image(img_path)
@@ -499,32 +500,36 @@ class RobotControl:
                 )
                 return
             try:
-                path, reproj = sess.finalize()
+                path, reproj, fit_rms = sess.finalize()
                 bx0, bx1 = sess.board_x_span
                 by0, by1 = sess.board_y_span
                 status_bus.set_message(
                     f"Extrinsik gespeichert: {sess.n_frames} Bilder, "
-                    f"Reproj {reproj:.2f} px, sichtbar board-x {bx0:.0f}..{bx1:.0f} / "
-                    f"y {by0:.0f}..{by1:.0f} mm"
+                    f"Reproj {reproj:.2f} px, Poly-Fehler {fit_rms:.2f} mm, "
+                    f"sichtbar board-x {bx0:.0f}..{bx1:.0f} / y {by0:.0f}..{by1:.0f} mm"
                 )
                 logger.info(
-                    f"[Extr] {path} reproj={reproj:.3f}px frames={sess.n_frames}"
+                    f"[Extr] {path} reproj={reproj:.3f}px fit_rms={fit_rms:.3f}mm "
+                    f"frames={sess.n_frames}"
                 )
-                # Sichtprüfungs-Overlay (mechanisches mm-Raster) veröffentlichen
+                # Sichtprüfungs-Overlay (mechanisches mm-Raster) auf dem Rohbild
                 try:
                     raw = _to_bgr(camera.picam2.capture_array())
-                    und, _nk = camera.undistort_bgr(raw)
                     _publish_preview(
-                        sess.grid_overlay(und if und is not None else raw),
+                        sess.grid_overlay(raw),
                         text=(
-                            f"Extrinsik OK – Raster prüfen (Reproj {reproj:.2f} px). "
-                            "Sitzt es daneben: Board neu ausrichten."
+                            f"Extrinsik OK – Raster prüfen (Reproj {reproj:.2f} px, "
+                            f"Poly {fit_rms:.2f} mm). Sitzt es daneben: Board neu "
+                            "ausrichten."
                         ),
                     )
                 except Exception:
                     logger.debug("[Extr] Overlay-Vorschau fehlgeschlagen", exc_info=True)
-                if reproj > 2.0:
-                    logger.warning(f"[Extr] hoher Reproj-Fehler {reproj:.2f} px")
+                if reproj > 2.0 or fit_rms > 1.0:
+                    logger.warning(
+                        f"[Extr] Qualität grenzwertig: reproj {reproj:.2f} px, "
+                        f"fit {fit_rms:.2f} mm"
+                    )
             except Exception as e:
                 status_bus.set_message(f"Extrinsik fehlgeschlagen: {e}")
                 logger.exception("[Extr] finalize fehlgeschlagen")
