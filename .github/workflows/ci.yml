@@ -16,7 +16,10 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install test dependencies
-        run: pip install numpy pytest
+        # opencv-python-headless: geometry/calibration nutzen cv2 (ChArUco,
+        # solvePnP, Homographie). pyserial/picamera2 sind Pi-only – die Tests
+        # dafür überspringen sich selbst (importorskip / conftest-Stub).
+        run: pip install numpy pytest opencv-python-headless
       - name: Syntax check (compileall)
         run: python -m compileall -q src main.py
       - name: Run unit tests
