@@ -317,37 +317,62 @@ def get_last_capture_timestamp():
         return _last_capture_ts
 
 
+def _stream_loop():
+    """Software-MJPEG: kleines `lores`-Frame holen, JPEG kodieren, ablegen.
+    Läuft durchgehend; `main` bleibt für Einzelbilder ungestört verfügbar."""
+    period = 1.0 / 12.0  # ~12 fps für die Vorschau
+    q = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+    while not _stream_stop.is_set():
+        t0 = time.monotonic()
+        try:
+            yuv = picam2.capture_array("lores")
+            bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
+            ok, jpg = cv2.imencode(".jpg", bgr, q)
+            if ok:
+                with stream_output.lock:
+                    stream_output.frame = jpg.tobytes()
+        except Exception as e:
+            logger.debug(f"Stream-Frame fehlgeschlagen: {e}")
+            time.sleep(0.2)
+        dt = time.monotonic() - t0
+        if dt < period:
+            time.sleep(period - dt)
+
+
 def start_stream():
-    """Startet den MJPEG-Stream auf dem `lores`-Ausgang (Hardware-Encoder).
-    `main` (Vollauflösung) bleibt parallel für Einzelbilder verfügbar."""
-    global stream_active
+    """Startet den Software-MJPEG-Stream (lores). `main` (Vollauflösung) bleibt
+    parallel für Einzelbilder verfügbar – kein Mode-Switch, kein Encoder-Neustart."""
+    global stream_active, _stream_thread
     try:
-        if not stream_active:
-            if not picam2.started:
-                picam2.start()
-                time.sleep(0.5)
-            try:
-                picam2.start_recording(
-                    MJPEGEncoder(), FileOutput(stream_output), name="lores"
-                )
-            except TypeError:
-                # ältere picamera2 ohne name= -> encode="lores" aus der Config greift
-                picam2.start_recording(MJPEGEncoder(), FileOutput(stream_output))
-            stream_active = True
-            logger.info("Stream (Hardware MJPEG / lores) aktiviert.")
+        if stream_active:
+            return
+        if not picam2.started:
+            picam2.start()
+            time.sleep(0.3)
+        _stream_stop.clear()
+        _stream_thread = threading.Thread(
+            target=_stream_loop, name="mjpeg-sw", daemon=True
+        )
+        _stream_thread.start()
+        stream_active = True
+        logger.info("Stream (Software-MJPEG / lores) aktiviert.")
     except Exception as e:
         logger.error(f"Fehler beim Starten des Streams: {str(e)}")
         stream_active = False
 
 
 def stop_stream():
-    """Stoppt den Video-Stream."""
-    global stream_active
+    """Stoppt den Software-MJPEG-Stream."""
+    global stream_active, _stream_thread
     try:
-        if stream_active:
-            picam2.stop_recording()
-            stream_active = False
-            logger.info("Stream (Hardware) deaktiviert.")
+        if not stream_active:
+            return
+        _stream_stop.set()
+        if _stream_thread is not None:
+            _stream_thread.join(timeout=1.5)
+        _stream_thread = None
+        stream_active = False
+        logger.info("Stream (Software) deaktiviert.")
     except Exception as e:
         logger.error(f"Fehler beim Stoppen des Streams: {str(e)}")
         stream_active = False
@@ -453,19 +478,21 @@ def start_http_server():
     server.serve_forever()
 
 
-# Kamera-Setup: EIN Modus, zwei Ausgänge.
-#  main  -> Einzelbilder in voller Auflösung
-#  lores -> MJPEG-Stream (läuft durchgehend, wird nie umgeschaltet)
+# Kamera-Setup: EIN Modus, zwei Ausgänge (kein Mode-Switch).
+#  main  = RGB888, volle Auflösung -> Einzelbilder (capture_array("main"))
+#  lores = YUV420, klein -> MJPEG-Stream (Software-JPEG in einem Thread,
+#          läuft durchgehend, wird nie umkonfiguriert)
 picam2 = Picamera2()
 _video_config = picam2.create_video_configuration(
-    main={"size": tuple(config.CAPTURE_RESOLUTION)},
-    lores={"size": tuple(config.CAMERA_RESOLUTION)},
-    encode="lores",
+    main={"size": tuple(config.CAPTURE_RESOLUTION), "format": "RGB888"},
+    lores={"size": tuple(config.CAMERA_RESOLUTION), "format": "YUV420"},
     buffer_count=4,
 )
 picam2.configure(_video_config)
 stream_output = MJPEGOutput()
 stream_active = False
+_stream_thread = None
+_stream_stop = threading.Event()
 
 
 def _arr_to_bgr(arr):
