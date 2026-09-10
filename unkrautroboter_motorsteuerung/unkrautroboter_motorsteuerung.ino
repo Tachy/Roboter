@@ -1597,17 +1597,26 @@ void processSerialCommand() {
                 setzeXPosition(MITTEX);
             }
         } else if (cmdBuffer.indexOf("MODE:EXTRINSIK") >= 0) {
-            // Kamera-Extrinsik: der Pi fährt die X-Positionen per GOTOX:<mm> an.
+            // Kamera-Extrinsik: Bürste hoch, Schlitten auf den Nullpunkt (X=0),
+            // damit der Bediener die Board-Ecke (0,0) unter die Bürste legen
+            // kann. Danach fährt der Pi die Messpositionen per GOTOX:<mm> an.
             bool warAuto = (currentMode == AUTO);
             currentMode = EXTRINSIK;
             debugln("RCD: EXTRINSIK");
             if (warAuto) {
                 abortRequested = true; // laufenden AUTO-Zyklus abbrechen (M4)
+            } else if (!calibOk) {
+                Serial.println("FAULT:NOCALIB");
             } else {
                 stoppeAlleMotoren();
                 abortRequested = false; // evtl. Rest aus einem früheren Abbruch
                 moveFault = false;
                 setzeZPosition(10); // Bürste hoch (kein Schleifen auf dem Board)
+                setzeXPosition(0);  // Nullpunkt anfahren
+                Serial.print("XREACHED:");
+                Serial.println(encoderX / IMPULSE_X_PRO_MM, 1);
+                if (moveFault)
+                    Serial.println("FAULT:MOVE");
             }
         }
 

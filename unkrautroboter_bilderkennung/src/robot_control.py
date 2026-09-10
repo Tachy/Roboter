@@ -164,7 +164,9 @@ class RobotControl:
                 except Exception:
                     pass
                 self.extr_session = None
-            # Beim Wechsel in EXTRINSIK: Session anlegen + Hinweis anzeigen
+            # Beim Wechsel in EXTRINSIK: Session anlegen, Schlitten fährt (durch
+            # MODE:EXTRINSIK oben) auf X=0; ein Worker wartet auf XREACHED und
+            # schaltet dann den Hinweis auf "Board auflegen".
             try:
                 if self.mode == "EXTRINSIK":
                     try:
@@ -173,13 +175,18 @@ class RobotControl:
                         self.extr_session = None
                         logger.warning(f"[Extr] Session-Init fehlgeschlagen: {e}")
                     status_bus.set_message(
-                        "Extrinsik: Board mit Ecke (0,0) unter die Bürste legen, "
-                        "dann 'Bild aufnehmen'"
+                        "Extrinsik: Schlitten fährt auf X=0 – bitte warten ..."
                     )
                     if camera.is_camera_started():
-                        _capture_preview(
-                            "Extrinsik: Board (0,0) unter die Bürste, dann 'Bild aufnehmen'"
-                        )
+                        _capture_preview("Extrinsik: Schlitten fährt auf X=0 ...")
+                    # Fenster schließen, in dem process_auto_mode das XREACHED
+                    # wegkonsumieren könnte:
+                    self._extr_seq_active = True
+                    threading.Thread(
+                        target=self._extrinsic_home_wait,
+                        name="extr-home",
+                        daemon=True,
+                    ).start()
                 # Beim Wechsel in DISTORTION: Erste Phase ohne Klick starten und Status setzen
                 if self.mode == "DISTORTION":
                     # Kalibriersession anlegen
@@ -389,6 +396,36 @@ class RobotControl:
                 logger.info(
                     "[Calib] abgeschlossen. Hardware-Stream bleibt roh; Kalibrierdaten werden für Offscreen-Verarbeitung genutzt."
                 )
+
+    def _extrinsic_home_wait(self):
+        """Wartet nach dem Wechsel in EXTRINSIK auf XREACHED (Schlitten auf X=0)
+        und schaltet den Hinweistext dann auf 'Board auflegen'."""
+        try:
+            deadline = time.monotonic() + 25.0
+            line = None
+            while time.monotonic() < deadline:
+                if self.get_mode() != "EXTRINSIK":
+                    return
+                line = self.serial.wait_for(("XREACHED:", "FAULT:"), timeout=1.0)
+                if line is not None:
+                    break
+            if self.get_mode() != "EXTRINSIK":
+                return
+            if line and line.startswith("FAULT"):
+                status_bus.set_message(
+                    f"Extrinsik: {line} beim Anfahren von X=0 – Mega prüfen"
+                )
+            else:
+                status_bus.set_message(
+                    "Extrinsik: Schlitten auf X=0 – Board mit Ecke (0,0) unter die "
+                    "Bürste legen, dann 'Bild aufnehmen'"
+                )
+                if camera.is_camera_started():
+                    _capture_preview(
+                        "Extrinsik: Board (0,0) unter die Bürste, dann 'Bild aufnehmen'"
+                    )
+        finally:
+            self._extr_seq_active = False
 
     def extrinsic_button_pressed(self):
         """Startet die mechanik-gekoppelte EXTRINSIK-Sequenz (ein Klick genügt).
