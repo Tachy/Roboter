@@ -2,9 +2,9 @@
 
 Getestet werden die reinen Geometrie-Helfer (keine Kamera/Serial-Hardware):
 - estimate_board_homography  (Pixel -> Board-mm)
-- similarity_from_point_pairs (Board-mm -> mechanische mm, Ähnlichkeitstransf.)
+- similarity_from_point_pairs / similarity_through_origin (generische Helfer)
 - compose_affine_homography  (S ∘ H)
-- identify_occluded_corner   (verdeckte ChArUco-Ecke bestimmen)
+- homography_from_pose        (Kamerapose + Intrinsik -> Pixel -> Boden-mm)
 """
 
 import numpy as np
@@ -145,38 +145,27 @@ def test_compose_affine_homography_chains_maps():
 
 
 # --------------------------------------------------------------------------- #
-# identify_occluded_corner                                                     #
+# homography_from_pose                                                         #
 # --------------------------------------------------------------------------- #
-def test_identify_occluded_corner_single_missing_returns_that_corner():
-    board_corners = _grid_corners()[:, :2]  # (126, 2), ids 0..125
-    all_ids = set(range(len(board_corners)))
-    # Ecke bei Board-mm (250, 50) -> row 0, col 4 -> id 4
-    occluded_id = 4
-    detected = np.array(sorted(all_ids - {occluded_id})).reshape(-1, 1)
-
-    xy, info = geometry.identify_occluded_corner(
-        detected, board_corners, predicted_board_xy=(240.0, 20.0), search_radius_mm=80.0
+def test_homography_from_pose_maps_pixels_back_to_ground_mm():
+    cv2 = pytest.importorskip("cv2")
+    K = np.array([[900.0, 0.0, 640.0], [0.0, 900.0, 360.0], [0.0, 0.0, 1.0]])
+    # Kamera ~400 mm über dem Boden, 25° nach vorn geneigt
+    th = np.deg2rad(25.0)
+    R = np.array(
+        [[1, 0, 0], [0, np.cos(th), -np.sin(th)], [0, np.sin(th), np.cos(th)]]
     )
-    assert xy is not None
-    assert np.allclose(xy, board_corners[occluded_id], atol=1e-6)
+    t = np.array([-30.0, 20.0, 420.0])
 
+    H = geometry.homography_from_pose(R, t, K)
 
-def test_identify_occluded_corner_returns_cluster_centroid():
-    board_corners = _grid_corners()[:, :2]
-    all_ids = set(range(len(board_corners)))
-    # ein Nest verdeckter Ecken um (250, 75): ids 3,4,5 (y=50) und 12,13,14 (y=100)
-    occluded = {3, 4, 5, 12, 13, 14}
-    detected = np.array(sorted(all_ids - occluded)).reshape(-1, 1)
-    xy, info = geometry.identify_occluded_corner(
-        detected, board_corners, predicted_board_xy=(250.0, 60.0), search_radius_mm=120.0
+    world = np.array([[0.0, 150.0], [220.0, 150.0], [440.0, 300.0], [100.0, 400.0]])
+    rvec, _ = cv2.Rodrigues(R)
+    px, _ = cv2.projectPoints(
+        np.hstack([world, np.zeros((len(world), 1))]).astype(np.float64),
+        rvec, t.reshape(3, 1), K, np.zeros(5),
     )
-    assert np.allclose(xy, board_corners[sorted(occluded)].mean(axis=0), atol=1e-6)
+    px = px.reshape(-1, 2)
 
-
-def test_identify_occluded_corner_none_when_nothing_missing_near_prediction():
-    board_corners = _grid_corners()[:, :2]
-    detected = np.arange(len(board_corners)).reshape(-1, 1)  # alle sichtbar
-    xy, info = geometry.identify_occluded_corner(
-        detected, board_corners, predicted_board_xy=(240.0, 20.0), search_radius_mm=80.0
-    )
-    assert xy is None
+    got = _apply_h(H, px)
+    assert np.allclose(got, world, atol=1e-6)

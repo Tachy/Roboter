@@ -139,10 +139,11 @@ def get_cpu_temperature():
 _calib_loaded = False
 _calib_K = None
 _calib_D = None
+_calib_newK = None  # newK aus der Datei (optional)
 _calib_img_size = None  # (W, H) aus der Datei
 _calib_map1 = None
 _calib_map2 = None
-_undistort_cache = {}  # {(w,h): (map1, map2)}
+_undistort_cache = {}  # {(w,h): (map1, map2, newK)}
 
 # Letztes aufgenommenes Bild (JPEG) im Speicher halten, inkl. Zeitstempel
 _last_capture_lock = threading.Lock()
@@ -179,7 +180,8 @@ def _encode_and_store_last_capture(bgr_image, quality: int = 90) -> bool:
 
 def _ensure_calibration_loaded():
     """Lädt Kalibrierungsdaten aus ./calibration/cam_calib_charuco.npz, wenn vorhanden."""
-    global _calib_loaded, _calib_K, _calib_D, _calib_img_size, _calib_map1, _calib_map2
+    global _calib_loaded, _calib_K, _calib_D, _calib_newK, _calib_img_size
+    global _calib_map1, _calib_map2
     if _calib_loaded:
         return True
     calib_path = Path("./calibration/cam_calib_charuco.npz")
@@ -201,6 +203,8 @@ def _ensure_calibration_loaded():
         # map1/map2 optional verwenden, wenn Größen passen
         _calib_map1 = d.get("map1", None)
         _calib_map2 = d.get("map2", None)
+        _nk = d.get("newK", None)
+        _calib_newK = None if _nk is None else np.asarray(_nk, dtype=np.float64)
         _calib_loaded = True
         logger.info(
             f"Kalibrierung geladen (K,D) aus ./calibration/cam_calib_charuco.npz; img_size={_calib_img_size}"
@@ -213,8 +217,10 @@ def _ensure_calibration_loaded():
 
 
 def _get_maps_for_size(width: int, height: int):
-    """Erzeugt/cached Remap-Tabellen für gegebene Größe basierend auf K,D.
+    """Erzeugt/cached Remap-Tabellen + newK für gegebene Größe basierend auf K,D.
     Berechnet newK für die Zielgröße automatisch (alpha=0).
+
+    Rückgabe: (map1, map2, newK) oder None.
     """
     key = (width, height)
     if key in _undistort_cache:
@@ -230,6 +236,12 @@ def _get_maps_for_size(width: int, height: int):
         ):
             logger.debug("Verwende gespeicherte Remap-Tabellen aus Kalibrierungsdatei.")
             map1, map2 = _calib_map1, _calib_map2
+            if _calib_newK is not None:
+                newK = _calib_newK
+            else:
+                newK, _ = cv2.getOptimalNewCameraMatrix(
+                    _calib_K, _calib_D, (width, height), alpha=0
+                )
         else:
             # Prüfe Aspect-Ratio – bei Abweichung warnen
             if _calib_img_size is not None:
@@ -262,11 +274,30 @@ def _get_maps_for_size(width: int, height: int):
             map1, map2 = cv2.initUndistortRectifyMap(
                 K_scaled, _calib_D, None, newK, img_size, cv2.CV_16SC2
             )
-        _undistort_cache[key] = (map1, map2)
-        return map1, map2
+        newK = np.asarray(newK, dtype=np.float64)
+        _undistort_cache[key] = (map1, map2, newK)
+        return map1, map2, newK
     except Exception as e:
         logger.error(f"Fehler beim Erzeugen der Remap-Tabellen: {e}")
         return None
+
+
+def undistort_bgr(bgr):
+    """Entzerrt ein BGR-Bild wie capture_image(undistort=True).
+
+    Rückgabe: (entzerrtes BGR, newK 3x3) oder (Originalbild, None), wenn keine
+    Kalibrierung vorhanden ist. newK ist die Intrinsik des entzerrten Bildes –
+    genau die Matrix, mit der geometry.pixel_to_world / solvePnP rechnen müssen.
+    """
+    if bgr is None:
+        return None, None
+    h, w = bgr.shape[:2]
+    mm = _get_maps_for_size(w, h)
+    if mm is None:
+        return bgr, None
+    map1, map2, newK = mm
+    out = cv2.remap(bgr, map1, map2, interpolation=cv2.INTER_LINEAR)
+    return out, newK
 
 
 # Overlay-Unterstützung entfällt im Hardware-Stream vollständig
@@ -375,7 +406,7 @@ def capture_image(filename: str, undistort: bool = True):
                 )
             mm = _get_maps_for_size(w, h)
             if mm is not None:
-                map1, map2 = mm
+                map1, map2, _newK = mm
                 out = cv2.remap(bgr, map1, map2, interpolation=cv2.INTER_LINEAR)
                 _encode_and_store_last_capture(out, quality=90)
                 ok = cv2.imwrite(filename, out)

@@ -73,3 +73,11 @@ FW_RESET_POST_PULSE_WAIT = 0.1
 # Weltkoordinaten: optionaler XY-Versatz (mm), um den Ursprung zu verschieben (z. B. unter die linke Bürste)
 # Beispiel: WORLD_OFFSET_XY_MM = (x_mm, y_mm) – wird von pixel_to_world subtrahiert
 WORLD_OFFSET_XY_MM = (0.0, 0.0)
+
+# EXTRINSIK: Anzahl der Kamerabilder, die pro Kalibrierung gepoolt werden
+# (Board + Kamera statisch -> alle Bilder sehen dieselbe Pose; Pooling mittelt
+# das Ecken-Rauschen). Die Board-Ecke (0,0) liegt bei Schlitten-X=0 unter dem
+# Bürstenmittelpunkt und die Board-X-Achse parallel zur Bürstenfahrt -> Board-mm
+# == mechanische mm (keine weitere Transformation). Feinkorrektur des Ursprungs
+# nur über WORLD_OFFSET_XY_MM.
+EXTRINSIK_NUM_FRAMES = 8

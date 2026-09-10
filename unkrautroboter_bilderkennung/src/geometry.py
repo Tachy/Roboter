@@ -492,35 +492,69 @@ def compose_affine_homography(S_2x3, H_3x3) -> np.ndarray:
     return S3 @ H
 
 
-def identify_occluded_corner(
-    detected_ids,
-    board_corners_mm,
-    predicted_board_xy,
-    search_radius_mm: float = 75.0,
-) -> Tuple[Optional[np.ndarray], str]:
-    """Schätzt die Board-mm-Lage der von der Bürste verdeckten Region.
+def homography_from_pose(R, t, K) -> np.ndarray:
+    """Pixel -> Boden-mm-Homographie (Ebene Z=0) aus Kamerapose + Intrinsik.
 
-    Unter den *nicht* erkannten inneren ChArUco-Ecken werden alle betrachtet,
-    die innerhalb search_radius_mm um die Vorhersage (predicted_board_xy,
-    Board-mm) liegen. Zurückgegeben wird ihr Schwerpunkt (die Bürste verdeckt
-    real ein ganzes Nest an Ecken – der Schwerpunkt ist ein deutlich besserer
-    Positions-Proxy als die einzelne nächste Ecke).
-    Rückgabe: (Board-mm (2,) oder None, Klartext-Info).
+    Für Weltpunkte auf Z=0 gilt s·[u,v,1]^T = K·[r1 | r2 | t]·[X,Y,1]^T.
+    Rückgabe ist die Inverse davon: Pixel -> (X_mm, Y_mm).
+    R: 3x3 (Welt->Kamera), t: (3,), K: 3x3 (zur passenden – i. d. R. entzerrten –
+    Bildauflösung).
     """
-    corners = np.asarray(board_corners_mm, dtype=float).reshape(-1, 2)
-    seen = set(np.asarray(detected_ids).reshape(-1).astype(int).tolist())
-    pred = np.asarray(predicted_board_xy, dtype=float).reshape(2)
+    R = np.asarray(R, dtype=float).reshape(3, 3)
+    t = np.asarray(t, dtype=float).reshape(3)
+    K = np.asarray(K, dtype=float).reshape(3, 3)
+    M = K @ np.column_stack([R[:, 0], R[:, 1], t])  # 3x3, Welt(Z=0) -> Pixel
+    return np.linalg.inv(M)
 
-    missing = [i for i in range(len(corners)) if i not in seen]
-    if not missing:
-        return None, "keine verdeckte Ecke (alle erkannt)"
 
-    d = np.array([np.hypot(*(corners[i] - pred)) for i in missing])
-    near = [missing[k] for k in range(len(missing)) if d[k] <= search_radius_mm]
-    if not near:
-        return None, (
-            f"nächste fehlende Ecke {d.min():.0f} mm entfernt "
-            f"(> {search_radius_mm:.0f} mm)"
-        )
-    centroid = corners[near].mean(axis=0)
-    return centroid, f"{len(near)} verdeckte Ecke(n), Schwerpunkt genutzt"
+def draw_mechanical_grid(
+    bgr,
+    R,
+    t,
+    K,
+    x_lines=(0, 50, 100, 150, 200, 250, 300, 350, 400, 450),
+    y_lines=(0, 100, 200, 300, 400),
+    color=(0, 200, 0),
+):
+    """Zeichnet ein mechanisches mm-Raster (Sichtprüfung) in ein BGR-Bild.
+
+    Die Linien werden in Welt-mm (Z=0) definiert und über die Pose ins Bild
+    projiziert; die Y=0-Linie (Bürstenlinie) liegt i. d. R. extrapoliert
+    unterhalb der sichtbaren Board-Region.
+    """
+    import cv2
+
+    draw = bgr.copy()
+    h, w = draw.shape[:2]
+    R = np.asarray(R, dtype=float).reshape(3, 3)
+    rvec, _ = cv2.Rodrigues(R)
+    tvec = np.asarray(t, dtype=float).reshape(3, 1)
+    K = np.asarray(K, dtype=float).reshape(3, 3)
+    zero_d = np.zeros(5)
+
+    y0, y1 = float(min(y_lines)), float(max(y_lines))
+    x0, x1 = float(min(x_lines)), float(max(x_lines))
+
+    def _project(pts_mm):
+        obj = np.hstack([np.asarray(pts_mm, float), np.zeros((len(pts_mm), 1))])
+        px, _ = cv2.projectPoints(obj.astype(np.float64), rvec, tvec, K, zero_d)
+        return px.reshape(-1, 2)
+
+    def _polyline(pts_mm, label=None):
+        px = _project(pts_mm)
+        if not np.all(np.isfinite(px)):
+            return
+        ipts = np.round(px).astype(np.int32)
+        cv2.polylines(draw, [ipts], False, color, 1, cv2.LINE_AA)
+        if label is not None:
+            p = tuple(int(v) for v in ipts[-1])
+            if -2000 < p[0] < w + 2000 and -2000 < p[1] < h + 2000:
+                cv2.putText(
+                    draw, label, p, cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA
+                )
+
+    for x in x_lines:
+        _polyline([[x, y0], [x, y1]], f"X{int(x)}")
+    for y in y_lines:
+        _polyline([[x0, y], [x1, y]], f"Y{int(y)}")
+    return draw

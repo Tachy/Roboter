@@ -418,12 +418,13 @@ class RobotControl:
                 )
             else:
                 status_bus.set_message(
-                    "Extrinsik: Schlitten auf X=0 – Board mit Ecke (0,0) unter die "
-                    "Bürste legen, dann 'Bild aufnehmen'"
+                    "Extrinsik: Schlitten auf X=0 – Board mit Ecke (0,0) unter den "
+                    "Bürstenmittelpunkt, X-Achse parallel zur Fahrtrichtung, dann "
+                    "'Bild aufnehmen'"
                 )
                 if camera.is_camera_started():
                     _capture_preview(
-                        "Extrinsik: Board (0,0) unter die Bürste, dann 'Bild aufnehmen'"
+                        "Extrinsik: Board (0,0) unter Bürste, parallel, dann 'Bild aufnehmen'"
                     )
         finally:
             self._extr_seq_active = False
@@ -455,65 +456,65 @@ class RobotControl:
         ).start()
 
     def _run_extrinsic_sequence(self):
-        """Worker: Schlitten an jede Zielposition fahren, Bild auswerten,
-        anschließend finalisieren. Besitzt währenddessen die serielle Leitung
-        (process_auto_mode pausiert über self._extr_seq_active)."""
+        """Worker: N Kamerabilder aufnehmen, ChArUco-Ecken poolen, Pose schätzen
+        und ground_homography.npz schreiben. Keine Schlitten-/Serial-Aktion – die
+        Bürste ist nie im Bild, das Board (X-Achse parallel zur Bürstenfahrt,
+        Ecke (0,0) unter der Bürste bei X=0) definiert das Koordinatensystem."""
         try:
             sess = self.extr_session
             if sess is None:
                 return
-            n = len(sess.targets_mm)
-            for idx, tgt in enumerate(sess.targets_mm):
+            n = int(getattr(config, "EXTRINSIK_NUM_FRAMES", 8))
+            for i in range(n):
                 if self.get_mode() != "EXTRINSIK":
                     status_bus.set_message("Extrinsik: abgebrochen (Moduswechsel)")
                     return
-                status_bus.set_message(
-                    f"Extrinsik {idx + 1}/{n}: fahre Schlitten auf X={tgt:.0f} mm ..."
-                )
-                self.send_command(f"GOTOX:{tgt:.0f}")
-                line = self.serial.wait_for(("XREACHED:", "FAULT:"), timeout=45.0)
-                if line is None:
-                    status_bus.set_message(
-                        f"Extrinsik: keine Arduino-Antwort bei X={tgt:.0f} – abgebrochen"
-                    )
-                    return
-                if line.startswith("FAULT"):
-                    status_bus.set_message(
-                        f"Extrinsik: {line} bei X={tgt:.0f} – abgebrochen"
-                    )
-                    return
-                try:
-                    actual_x = float(line.split(":", 1)[1])
-                except (ValueError, IndexError):
-                    actual_x = float(tgt)
-
-                time.sleep(0.5)  # Nachschwingen der Mechanik abklingen lassen
                 bgr = _to_bgr(camera.picam2.capture_array())
-                ok, msg, preview = sess.capture(bgr, actual_x, is_origin=(idx == 0))
+                ok, msg, preview = sess.add_frame(bgr)
                 _publish_preview(
                     preview if preview is not None else bgr,
-                    text=f"Extrinsik {sess.count}/{n} (X={actual_x:.0f}): {msg}",
+                    text=f"Extrinsik: Bild {sess.n_frames}/{n} ({msg})",
                 )
                 if not ok:
-                    logger.warning(f"[Extr] Position {idx + 1} (X={actual_x:.0f}): {msg}")
+                    logger.warning(f"[Extr] Bild {i + 1}: {msg}")
+                time.sleep(0.15)
 
-            try:
-                path, resid = sess.finalize()
+            if sess.n_frames < max(2, n // 2):
                 status_bus.set_message(
-                    f"Extrinsik gespeichert: {sess.count} Pos., Residuum {resid:.1f} mm, "
-                    f"Maßstab {sess.last_scale:.3f} [{sess.last_method}]"
+                    f"Extrinsik: Board zu selten erkannt ({sess.n_frames}/{n}) – "
+                    "nichts gespeichert"
+                )
+                return
+            try:
+                path, reproj = sess.finalize()
+                bx0, bx1 = sess.board_x_span
+                by0, by1 = sess.board_y_span
+                status_bus.set_message(
+                    f"Extrinsik gespeichert: {sess.n_frames} Bilder, "
+                    f"Reproj {reproj:.2f} px, sichtbar board-x {bx0:.0f}..{bx1:.0f} / "
+                    f"y {by0:.0f}..{by1:.0f} mm"
                 )
                 logger.info(
-                    f"[Extr] {path} resid={resid:.2f} mm scale={sess.last_scale:.4f} "
-                    f"theta={sess.last_theta_deg:.2f}° method={sess.last_method}"
+                    f"[Extr] {path} reproj={reproj:.3f}px frames={sess.n_frames}"
                 )
+                # Sichtprüfungs-Overlay (mechanisches mm-Raster) veröffentlichen
+                try:
+                    raw = _to_bgr(camera.picam2.capture_array())
+                    und, _nk = camera.undistort_bgr(raw)
+                    _publish_preview(
+                        sess.grid_overlay(und if und is not None else raw),
+                        text=(
+                            f"Extrinsik OK – Raster prüfen (Reproj {reproj:.2f} px). "
+                            "Sitzt es daneben: Board neu ausrichten."
+                        ),
+                    )
+                except Exception:
+                    logger.debug("[Extr] Overlay-Vorschau fehlgeschlagen", exc_info=True)
+                if reproj > 2.0:
+                    logger.warning(f"[Extr] hoher Reproj-Fehler {reproj:.2f} px")
             except Exception as e:
                 status_bus.set_message(f"Extrinsik fehlgeschlagen: {e}")
                 logger.exception("[Extr] finalize fehlgeschlagen")
-
-            # Schlitten zurück in die Parkposition (MITTEX = 220 mm)
-            self.send_command("GOTOX:220")
-            self.serial.wait_for(("XREACHED:", "FAULT:"), timeout=45.0)
         except Exception as e:
             logger.exception(f"[Extr] Sequenzfehler: {e}")
             try:
