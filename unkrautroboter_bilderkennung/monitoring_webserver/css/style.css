@@ -163,7 +163,9 @@ img {
     width: 100%;
     max-width: 1280px;
     height: auto;
-    aspect-ratio: 16/9;
+    aspect-ratio: 4/3;
+    /* Stream (lores) und letzte Aufnahme (main) decken beide die volle
+       IMX477-Sensor-FOV ab -> 4:3, nur unterschiedliche Auflösung. */
     display: block;
 }
 

@@ -45,8 +45,13 @@ YOLO_IOU = 0.45  # IoU-Schwelle
 #  - main  = CAPTURE_RESOLUTION: alle Einzelbilder (GETXY, EXTRINSIK, DISTORTION,
 #            Training) in voller IMX477-Auflösung 4056x3040.
 #  - lores = CAMERA_RESOLUTION:  läuft durchgehend als MJPEG-Stream/Vorschau.
+# lores wird von picamera2 aus dem VOLLEN `main`-Bildfeld heruntergerechnet
+# (kein eigener Crop). Daher muss CAMERA_RESOLUTION dasselbe Seitenverhältnis
+# wie CAPTURE_RESOLUTION haben (4:3), sonst wird das Vorschaubild anamorph
+# gestaucht. So decken Stream und Einzelbilder dieselbe Sensor-FOV ab, nur in
+# unterschiedlicher Auflösung.
 CAPTURE_RESOLUTION = (4056, 3040)
-CAMERA_RESOLUTION = (1280, 720)
+CAMERA_RESOLUTION = (1024, 768)
 # EXTRINSIK nutzt die volle `main`-Auflösung (subpixelgenaue Ecken). GETXY wird
 # aus `main` auf diese Größe heruntergerechnet (kleine, schnelle PNGs); das
 # Polynom skaliert die Pixel über ref_wh automatisch hoch.
