@@ -81,6 +81,15 @@ def test_finalize_from_injected_corners(tmp_path, monkeypatch):
         assert gy == pytest.approx(obj_all[i, 1], abs=1.0)
 
 
+def test_distortion_uses_small_board_extrinsik_uses_big():
+    # DISTORTION: kleines A4-Board (7x5 -> 6x4 = 24 innere Ecken)
+    cs = calibration.CalibrationSession(target_snapshots=5)
+    assert cs.board.getChessboardCorners().shape[0] == 24
+    # EXTRINSIK: großes Boden-Board (10x15 -> 9x14 = 126)
+    es = calibration.ExtrinsicSession()
+    assert es.board.getChessboardCorners().shape[0] == 126
+
+
 def test_finalize_needs_frames(tmp_path, monkeypatch):
     monkeypatch.setattr(calibration, "POLY_FILE", tmp_path / "g.npz")
     sess = calibration.ExtrinsicSession()

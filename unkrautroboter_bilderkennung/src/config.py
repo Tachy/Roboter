@@ -51,6 +51,15 @@ CAMERA_RESOLUTION = (1280, 720)
 STILL_RESOLUTION_GETXY = (2028, 1520)
 STILL_RESOLUTION_EXTRINSIK = (4056, 3040)
 
+# Kleines ChArUco-Board NUR für den DISTORTION-Modus (K, D). Passt quer auf A4
+# (7x35 = 245 mm x 5x35 = 175 mm) und lässt sich plan aufziehen. Dictionary =
+# dasselbe wie das große Boden-Board (calibration.DICT_NAME). Für die Intrinsik
+# ist der absolute Maßstab egal – nur das Feld/Marker-Verhältnis zählt.
+# Board-Bild erzeugen: python tools/gen_distortion_board.py
+DISTORTION_BOARD_SQUARES = (7, 5)       # (x, y)
+DISTORTION_BOARD_SQUARE_MM = 35.0
+DISTORTION_BOARD_MARKER_MM = 26.0
+
 # Training Setup
 TRAINING_IMAGE_DIR = "./training/"
 

@@ -8,12 +8,20 @@ import numpy as np
 import cv2
 from . import camera, status_bus, config
 
-# Board-Konfiguration (wie im Standalone-Skript)
+# Haupt-Board (EXTRINSIK): das große Board am Boden.
 SQUARES_X = 10
 SQUARES_Y = 15
 SQUARE_MM = 50.0
 MARKER_MM = 35.0
 DICT_NAME = "DICT_5X5_1000"
+
+# Eigenes, kleineres Board NUR für DISTORTION (K,D) – Parameter aus config.
+# Passt quer auf A4, lässt sich absolut plan aufziehen. Gleiches Wörterbuch wie
+# das Haupt-Board. Für die Intrinsik ist der ABSOLUTE Maßstab egal (K,D sind
+# skaleninvariant) – wichtig sind Planheit und volle Sichtbarkeit.
+DISTORTION_SQUARES_X, DISTORTION_SQUARES_Y = config.DISTORTION_BOARD_SQUARES
+DISTORTION_SQUARE_MM = float(config.DISTORTION_BOARD_SQUARE_MM)
+DISTORTION_MARKER_MM = float(config.DISTORTION_BOARD_MARKER_MM)
 
 OUT_DIR = Path("./calibration")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -33,13 +41,30 @@ def get_aruco_dict():
     return ar.getPredefinedDictionary(d)
 
 
-def make_charuco_board(aruco_dict):
+def make_charuco_board(
+    aruco_dict,
+    squares_x=SQUARES_X,
+    squares_y=SQUARES_Y,
+    square_mm=SQUARE_MM,
+    marker_mm=MARKER_MM,
+):
     ar = cv2.aruco
     if hasattr(ar, "CharucoBoard_create"):
         return ar.CharucoBoard_create(
-            SQUARES_X, SQUARES_Y, SQUARE_MM, MARKER_MM, aruco_dict
+            squares_x, squares_y, square_mm, marker_mm, aruco_dict
         )
-    return ar.CharucoBoard((SQUARES_X, SQUARES_Y), SQUARE_MM, MARKER_MM, aruco_dict)
+    return ar.CharucoBoard((squares_x, squares_y), square_mm, marker_mm, aruco_dict)
+
+
+def make_distortion_board(aruco_dict):
+    """Kleines A4-Board – wird ausschließlich im DISTORTION-Modus genutzt."""
+    return make_charuco_board(
+        aruco_dict,
+        DISTORTION_SQUARES_X,
+        DISTORTION_SQUARES_Y,
+        DISTORTION_SQUARE_MM,
+        DISTORTION_MARKER_MM,
+    )
 
 
 def detect_charuco(gray, aruco_dict, board):
@@ -116,7 +141,9 @@ class CalibrationSession:
         self.marker_snapshots = []
         ensure_aruco_support()
         self.aruco_dict = get_aruco_dict()
-        self.board = make_charuco_board(self.aruco_dict)
+        # DISTORTION nutzt das kleine A4-Board (plan aufziehbar), nicht das
+        # große Boden-Board der EXTRINSIK.
+        self.board = make_distortion_board(self.aruco_dict)
         self.last_counts = (0, 0)  # (n_mk, n_ch)
 
     # Kein Overlay mehr im Hardware-Stream
@@ -196,9 +223,9 @@ class CalibrationSession:
             newK=newK,
             img_size=np.array(img_size),
             reproj_err=float(ret),
-            board_squares=(SQUARES_X, SQUARES_Y),
-            square_mm=SQUARE_MM,
-            marker_mm=MARKER_MM,
+            board_squares=(DISTORTION_SQUARES_X, DISTORTION_SQUARES_Y),
+            square_mm=DISTORTION_SQUARE_MM,
+            marker_mm=DISTORTION_MARKER_MM,
             aruco_dict=DICT_NAME,
         )
         # Kamera-Kalibrierung neu laden
