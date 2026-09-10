@@ -268,13 +268,19 @@ class RobotControl:
                 logger.info("-> Arduino: NOCALIB")
                 return
 
-            # ROHbild aufnehmen (keine Entzerrung). YOLO und geometry.pixel_to_world
-            # (Polynom "Kurvenmatrix") arbeiten direkt auf Rohpixeln.
-            filename = "frame.jpg"
-            camera.capture_image(filename, undistort=False)
-            img_path = filename
+            # ROHbild in GETXY-Auflösung aufnehmen (Mode-Switch, keine Entzerrung),
+            # verlustfrei als PNG ablegen. geometry.pixel_to_world skaliert die
+            # Pixel intern auf die EXTRINSIK-Referenzauflösung.
+            getxy_size = getattr(config, "STILL_RESOLUTION_GETXY", None)
+            bgr = camera.capture_still_array(getxy_size) if getxy_size else _to_bgr(
+                camera.picam2.capture_array()
+            )
+            src_h, src_w = bgr.shape[:2]
+            filename = "frame.png"
+            if not cv2.imwrite(filename, bgr):
+                raise RuntimeError("frame.png konnte nicht geschrieben werden")
 
-            coords = yolo_detector.process_image(img_path)
+            coords = yolo_detector.process_image(filename)
 
             # Modus könnte sich während der Inferenz geändert haben
             if self.get_mode() != "AUTO":
@@ -288,7 +294,9 @@ class RobotControl:
                     logger.info("[AUTO] Moduswechsel – Koordinatenversand abgebrochen.")
                     return
                 try:
-                    w = geometry.pixel_to_world(float(x), float(y))
+                    w = geometry.pixel_to_world(
+                        float(x), float(y), src_wh=(src_w, src_h)
+                    )
                 except Exception as e:
                     logger.warning(
                         f"[AUTO] pixel_to_world fehlgeschlagen für ({x:.1f},{y:.1f}): {e}"
@@ -483,11 +491,20 @@ class RobotControl:
                 return
             time.sleep(0.5)  # Nachschwingen abklingen lassen
 
-            for i in range(n):
+            # N Bilder in voller Auflösung (ein Mode-Switch für alle).
+            extr_size = getattr(config, "STILL_RESOLUTION_EXTRINSIK", None)
+            status_bus.set_message(f"Extrinsik: nehme {n} Bilder auf ...")
+            try:
+                frames = camera.capture_still_array(extr_size, n=max(2, n))
+            except Exception as e:
+                status_bus.set_message(f"Extrinsik: Aufnahme fehlgeschlagen ({e})")
+                return
+            if not isinstance(frames, list):
+                frames = [frames]
+            for i, bgr in enumerate(frames):
                 if self.get_mode() != "EXTRINSIK":
                     status_bus.set_message("Extrinsik: abgebrochen (Moduswechsel)")
                     return
-                bgr = _to_bgr(camera.picam2.capture_array())
                 ok, msg, preview = sess.add_frame(bgr)
                 _publish_preview(
                     preview if preview is not None else bgr,
@@ -495,7 +512,6 @@ class RobotControl:
                 )
                 if not ok:
                     logger.warning(f"[Extr] Bild {i + 1}: {msg}")
-                time.sleep(0.15)
 
             if sess.n_frames < max(2, n // 2):
                 status_bus.set_message(

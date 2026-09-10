@@ -216,3 +216,20 @@ def test_fit_and_eval_poly_recovers_distorted_map():
         gxv, gyv = geometry.eval_pixel_to_world_poly(C, 3, float(u), float(v))
         assert gxv == pytest.approx(X, abs=1.0)
         assert gyv == pytest.approx(Y, abs=1.0)
+
+
+def test_pixel_to_world_scales_from_src_resolution(monkeypatch):
+    # C (Grad 1): X = u, Y = v
+    C = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    monkeypatch.setattr(geometry, "_C", C, raising=False)
+    monkeypatch.setattr(geometry, "_C_degree", 1, raising=False)
+    monkeypatch.setattr(geometry, "_C_bbox", None, raising=False)
+    monkeypatch.setattr(geometry, "_C_ref_wh", np.array([4056.0, 3040.0]), raising=False)
+    monkeypatch.setattr(geometry, "_H", None, raising=False)
+
+    # Referenzauflösung: Pixel == mm
+    assert geometry.pixel_to_world(2000.0, 1500.0) == pytest.approx((2000.0, 1500.0))
+    # halbe Auflösung -> intern x2 hochskaliert (4056/2028 == 3040/1520 == 2.0)
+    assert geometry.pixel_to_world(1000.0, 750.0, src_wh=(2028, 1520)) == pytest.approx(
+        (2000.0, 1500.0)
+    )

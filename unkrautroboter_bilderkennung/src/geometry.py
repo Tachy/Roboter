@@ -51,7 +51,8 @@ _plane_is_z0: bool = False
 # "Kurvenmatrix": Polynom Rohpixel -> Boden-mm (bevorzugter Pfad)
 _C: Optional[np.ndarray] = None          # (n_terms, 2)
 _C_degree: int = 0
-_C_bbox: Optional[np.ndarray] = None     # [u_min, u_max, v_min, v_max]
+_C_bbox: Optional[np.ndarray] = None     # [u_min, u_max, v_min, v_max] (Ref-Auflösung)
+_C_ref_wh: Optional[np.ndarray] = None   # (w, h) der EXTRINSIK-Aufnahme
 
 
 def _safe_load_npz(path: str) -> Optional[dict]:
@@ -142,7 +143,7 @@ def load_ground_poly(path: Optional[str] = None) -> bool:
     Erwartet in der npz: 'C' (n_terms, 2), 'degree' (int), optional 'pix_bbox'
     ([u_min,u_max,v_min,v_max]).
     """
-    global _C, _C_degree, _C_bbox
+    global _C, _C_degree, _C_bbox, _C_ref_wh
     p = path or POLY_FILE
     d = _safe_load_npz(p)
     if not d:
@@ -162,7 +163,12 @@ def load_ground_poly(path: Optional[str] = None) -> bool:
     _C_degree = degree
     bb = d.get("pix_bbox")
     _C_bbox = None if bb is None else np.asarray(bb, dtype=float).reshape(4)
-    logger.info(f"[Geom] Polynom (Grad {degree}) geladen aus {p}.")
+    rw = d.get("ref_wh")
+    _C_ref_wh = None if rw is None else np.asarray(rw, dtype=float).reshape(2)
+    logger.info(
+        f"[Geom] Polynom (Grad {degree}, Ref {None if _C_ref_wh is None else tuple(_C_ref_wh.astype(int))}) "
+        f"geladen aus {p}."
+    )
     return True
 
 
@@ -237,16 +243,26 @@ def _ray_plane_intersection(px: float, py: float) -> Optional[Tuple[float, float
         return float(Xw[0]), float(Xw[1])
 
 
-def pixel_to_world(px: float, py: float) -> Optional[Tuple[float, float]]:
+def pixel_to_world(
+    px: float, py: float, src_wh=None
+) -> Optional[Tuple[float, float]]:
     """Konvertiert Pixelkoordinaten (px,py) nach Welt-mm.
 
     Priorität: Polynom ("Kurvenmatrix", auf ROHpixeln) > Homographie > Extrinsik.
+    src_wh: (w,h) der Auflösung, in der (px,py) vorliegen. Weicht sie von der
+    Referenzauflösung des Polynoms ab (z.B. GETXY 2028x1520 vs. EXTRINSIK
+    4056x3040), werden die Koordinaten skaliert. None -> bereits Referenz.
     Gibt None zurück, wenn nicht möglich. `WORLD_OFFSET_XY_MM` wird abgezogen.
     """
     ox, oy = getattr(config, "WORLD_OFFSET_XY_MM", (0.0, 0.0))
 
     # 0) Polynom (Rohbild-Pipeline)
     if _C is not None:
+        if _C_ref_wh is not None and src_wh is not None:
+            sw, sh = float(src_wh[0]), float(src_wh[1])
+            if sw > 0 and sh > 0:
+                px = px * (_C_ref_wh[0] / sw)
+                py = py * (_C_ref_wh[1] / sh)
         if _C_bbox is not None:
             u0, u1, v0, v1 = _C_bbox
             m = 0.08 * max(u1 - u0, v1 - v0)  # großzügiger Rand

@@ -377,23 +377,25 @@ def stop_camera_if_idle():
 
 
 # Alte Signatur entfernt; neue Signatur unten
-def capture_image(filename: str, undistort: bool = True):
+def capture_image(filename: str, undistort: bool = True, size=None):
     """
-    Nimmt ein einzelnes Bild auf.
-    - undistort=True: Bild wird entzerrt (empfohlen für GETXY/EXTRINSIK).
-    - undistort=False: Bild wird roh gespeichert (empfohlen für Trainings/Testdaten).
+    Nimmt ein einzelnes Bild auf und speichert es unter `filename`.
+    - undistort=True: Bild wird entzerrt (Legacy; im Betrieb nicht mehr genutzt).
+    - undistort=False: Rohbild.
+    - size: (w,h) -> Aufnahme in dieser nativen Auflösung per Mode-Switch
+      (capture_still_array); sonst Stream-Auflösung.
+    Bildformat richtet sich nach der Dateiendung (.png verlustfrei, .jpg).
     """
     try:
         logger.debug("Starte Bildaufnahme...")
         started_here = ensure_camera_started()
-        arr = picam2.capture_array()
-        if arr is None:
-            raise RuntimeError("capture_array lieferte None")
-        # RGBA → BGR
-        if arr.ndim == 3 and arr.shape[2] == 4:
-            bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+        if size is not None:
+            bgr = capture_still_array(size)
         else:
-            bgr = arr
+            arr = picam2.capture_array()
+            if arr is None:
+                raise RuntimeError("capture_array lieferte None")
+            bgr = _arr_to_bgr(arr)
         h, w = bgr.shape[:2]
         if undistort:
             if (
@@ -446,10 +448,56 @@ def start_http_server():
 
 # Kamera-Setup
 picam2 = Picamera2()
-picam2.configure(
-    picam2.create_video_configuration(main={"size": config.CAMERA_RESOLUTION})
+_video_config = picam2.create_video_configuration(
+    main={"size": config.CAMERA_RESOLUTION}
 )
+picam2.configure(_video_config)
 stream_output = MJPEGOutput()
 stream_active = False
+
+
+def _arr_to_bgr(arr):
+    """picamera2-Array (RGBA/RGB) -> BGR."""
+    if arr is None:
+        return None
+    if arr.ndim == 3 and arr.shape[2] == 4:
+        return cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+    if arr.ndim == 3 and arr.shape[2] == 3:
+        return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+    return arr
+
+
+def capture_still_array(size, n: int = 1, settle: float = 0.4):
+    """Holt n Bilder in nativer Auflösung `size` (Mode-Switch), danach zurück auf
+    die Video-Konfiguration. Der Stream wird dafür kurz gestoppt und wieder
+    gestartet.
+
+    Rückgabe: BGR-ndarray (n == 1) oder Liste von BGR-ndarrays.
+    Wirft bei Fehlschlag -> Aufrufer entscheidet (kein stiller Fallback auf
+    Stream-Auflösung, sonst passt das kalibrierte Polynom nicht).
+    """
+    ensure_camera_started()
+    was_streaming = stream_active
+    frames = []
+    try:
+        if was_streaming:
+            stop_stream()
+        still_cfg = picam2.create_still_configuration(main={"size": tuple(size)})
+        picam2.switch_mode(still_cfg)
+        time.sleep(settle)
+        for i in range(max(1, n)):
+            frames.append(_arr_to_bgr(picam2.capture_array("main")))
+            if i + 1 < n:
+                time.sleep(0.12)
+    finally:
+        try:
+            picam2.switch_mode(_video_config)
+        except Exception as e:
+            logger.error(f"Zurückschalten auf Video-Konfiguration fehlgeschlagen: {e}")
+        if was_streaming:
+            start_stream()
+    if not frames or any(f is None for f in frames):
+        raise RuntimeError(f"Still-Aufnahme {tuple(size)} lieferte kein Bild")
+    return frames[0] if n == 1 else frames
 
 # Keine Software-Stream-Schleife mehr

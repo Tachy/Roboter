@@ -6,7 +6,7 @@ Sammelt per Joystick-Button Snapshots (ohne Overlay im Live-Stream).
 from pathlib import Path
 import numpy as np
 import cv2
-from . import camera, status_bus
+from . import camera, status_bus, config
 
 # Board-Konfiguration (wie im Standalone-Skript)
 SQUARES_X = 10
@@ -134,18 +134,15 @@ class CalibrationSession:
     # Overlay-Funktion entfällt
 
     def capture_snapshot(self):
-        # aktuelles Frame holen – im Kalibrierungsmodus läuft der Stream
-        arr = camera.picam2.capture_array()
-        if arr is None:
+        # Aufnahme in voller EXTRINSIK-Auflösung (4056x3040) -> K,D passen zur
+        # späteren EXTRINSIK-Aufnahme.
+        try:
+            bgr = camera.capture_still_array(config.STILL_RESOLUTION_EXTRINSIK)
+        except Exception as e:
+            status_bus.set_message(f"Kalibrierung: Aufnahme fehlgeschlagen ({e})")
             return False, (0, 0)
-        # Korrekte Farbumwandlung: RGBA -> BGR, sonst unverändert
-        if arr.ndim == 3 and arr.shape[2] == 4:
-            bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-        elif arr.ndim == 3 and arr.shape[2] == 3:
-            # Einige Setups liefern RGB – hier ggf. in BGR wandeln; wenn Farben vertauscht wirken, weglassen
-            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-        else:
-            bgr = arr
+        if bgr is None:
+            return False, (0, 0)
         ch_corners, ch_ids, mk_corners, mk_ids, counts = self._detect_on_frame(bgr)
         # speichern
         if ch_corners is not None and ch_ids is not None:
@@ -176,16 +173,10 @@ class CalibrationSession:
         return True, counts
 
     def finalize(self):
-        # Bildgröße aus aktuellem Frame ableiten – im Kalibrierungsmodus läuft der Stream
-        arr = camera.picam2.capture_array()
-        if arr is None:
+        # img_size aus einer Aufnahme in EXTRINSIK-Auflösung.
+        bgr = camera.capture_still_array(config.STILL_RESOLUTION_EXTRINSIK)
+        if bgr is None:
             raise RuntimeError("Kein Kamerabild verfügbar für Finalisierung.")
-        if arr.ndim == 3 and arr.shape[2] == 4:
-            bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-        elif arr.ndim == 3 and arr.shape[2] == 3:
-            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-        else:
-            bgr = arr
         h, w = bgr.shape[:2]
         img_size = (w, h)
         ret, K, D = calibrate_from_accum(
@@ -195,18 +186,14 @@ class CalibrationSession:
             img_size,
             self.board,
         )
-        newK, roi = cv2.getOptimalNewCameraMatrix(K, D, img_size, alpha=0)
-        map1, map2 = cv2.initUndistortRectifyMap(
-            K, D, None, newK, img_size, cv2.CV_16SC2
-        )
+        newK, _roi = cv2.getOptimalNewCameraMatrix(K, D, img_size, alpha=0)
+        # map1/map2 werden NICHT gespeichert: bei 4056x3040 sind das ~100 MB;
+        # die Rohbild-Pipeline (v3.1) entzerrt keine Vollbilder mehr.
         np.savez(
             OUT_FILE,
             K=K,
             D=D,
             newK=newK,
-            roi=np.array(roi),
-            map1=map1,
-            map2=map2,
             img_size=np.array(img_size),
             reproj_err=float(ret),
             board_squares=(SQUARES_X, SQUARES_Y),
@@ -393,11 +380,13 @@ class ExtrinsicSession:
         self.board_x_span = (x0, x1)
         self.board_y_span = (y0, y1)
 
+        h_img, w_img = self.img_shape if self.img_shape else (0, 0)
         np.savez(
             POLY_FILE,
             C=C,
             degree=int(degree),
             pix_bbox=pix_bbox,
+            ref_wh=np.array([int(w_img), int(h_img)]),
             fit_rms_mm=float(rms),
             fit_max_mm=float(mx),
             reproj_px=float(reproj),

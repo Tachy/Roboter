@@ -21,7 +21,7 @@ def get_next_image_number():
     """Ermittelt die nächste Bildnummer für das Training."""
     if not os.path.exists(config.TRAINING_IMAGE_DIR):
         os.makedirs(config.TRAINING_IMAGE_DIR)
-    files = glob.glob(os.path.join(config.TRAINING_IMAGE_DIR, "bild_*.jpg"))
+    files = glob.glob(os.path.join(config.TRAINING_IMAGE_DIR, "bild_*.*"))
     if not files:
         return 1
     numbers = [int(os.path.basename(f).split("_")[1].split(".")[0]) for f in files]
@@ -29,9 +29,11 @@ def get_next_image_number():
 
 
 def save_training_image():
-    """Nimmt ein Bild auf und speichert es im Trainingsverzeichnis (immer raw, ohne Undistortion)."""
+    """Nimmt ein Rohbild in GETXY-Auflösung auf und speichert es verlustfrei als
+    PNG (dieselbe Bildart, die YOLO im Betrieb sieht)."""
     logger.info("Bild speichern....")
     next_number = get_next_image_number()
-    filename = os.path.join(config.TRAINING_IMAGE_DIR, f"bild_{next_number:04d}.jpg")
-    camera.capture_image(filename, undistort=False)
+    filename = os.path.join(config.TRAINING_IMAGE_DIR, f"bild_{next_number:04d}.png")
+    size = getattr(config, "STILL_RESOLUTION_GETXY", None)
+    camera.capture_image(filename, undistort=False, size=size)
     logger.info(f"Bild gespeichert: {filename}")
