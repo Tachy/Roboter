@@ -1597,9 +1597,12 @@ void processSerialCommand() {
                 setzeXPosition(MITTEX);
             }
         } else if (cmdBuffer.indexOf("MODE:EXTRINSIK") >= 0) {
-            // Kamera-Extrinsik: Bürste hoch, Schlitten auf den Nullpunkt (X=0),
-            // damit der Bediener die Board-Ecke (0,0) unter die Bürste legen
-            // kann. Danach fährt der Pi die Messpositionen per GOTOX:<mm> an.
+            // Kamera-Extrinsik: Bürste hoch, dann X per REFERENZFAHRT auf den
+            // mechanischen Nullpunkt (Anschlag END_X_L, encoderX = 0) - nicht
+            // per setzeXPosition, damit der Nullpunkt am physischen Anschlag
+            // sitzt und nicht auf einem evtl. verdrifteten Encoderwert. Danach
+            // legt der Bediener die Board-Ecke (0,0) unter die Bürste; der Pi
+            // fährt die Messpositionen per GOTOX:<mm> an.
             bool warAuto = (currentMode == AUTO);
             currentMode = EXTRINSIK;
             debugln("RCD: EXTRINSIK");
@@ -1611,12 +1614,13 @@ void processSerialCommand() {
                 stoppeAlleMotoren();
                 abortRequested = false; // evtl. Rest aus einem früheren Abbruch
                 moveFault = false;
-                setzeZPosition(10); // Bürste hoch (kein Schleifen auf dem Board)
-                setzeXPosition(0);  // Nullpunkt anfahren
-                Serial.print("XREACHED:");
-                Serial.println(encoderX / IMPULSE_X_PRO_MM, 1);
-                if (moveFault)
+                setzeZPosition(10);      // Bürste hoch (kein Schleifen auf dem Board)
+                bool xOk = kalibriereX(); // Referenzfahrt an END_X_L -> encoderX = 0
+                if (xOk && !moveFault) {
+                    Serial.println("XREACHED:0.0");
+                } else {
                     Serial.println("FAULT:MOVE");
+                }
             }
         }
 

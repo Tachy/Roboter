@@ -401,7 +401,8 @@ class RobotControl:
         """Wartet nach dem Wechsel in EXTRINSIK auf XREACHED (Schlitten auf X=0)
         und schaltet den Hinweistext dann auf 'Board auflegen'."""
         try:
-            deadline = time.monotonic() + 25.0
+            # Z hoch + X-Referenzfahrt (kalibriereX, bis zu ~15 s Timeout)
+            deadline = time.monotonic() + 32.0
             line = None
             while time.monotonic() < deadline:
                 if self.get_mode() != "EXTRINSIK":
