@@ -237,7 +237,7 @@ class ExtrinsicSession:
     Voraussetzung (physisch am Gerät hergestellt): Bürste auf Schlitten-X=0,
     Board-Ecke (0,0) unter den Bürstenmittelpunkt, Board-X-Achse exakt parallel
     zur Bürstenfahrt -> **Board-mm == mechanische mm**. Die Aufnahme erfolgt
-    von der Kameraposition X=220 (= spätere AUTO-Aufnahmeposition).
+    von der Kameraposition config.EXTRINSIK_CAPTURE_X_MM (= MITTEX / AUTO-Aufnahme).
 
     Ablauf: ChArUco auf den ROHbildern erkennen (mehrere gepoolt) ->
     cv2.solvePnP(K, D) -> Pose. Dann ein Welt-mm-Gitter über den sichtbaren

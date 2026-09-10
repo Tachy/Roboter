@@ -165,7 +165,7 @@ Mode currentMode = WAITING_FOR_START; // Startet im Wartezustand
 
 #define MAX_X 440
 #define MAX_Z 58
-#define MITTEX 220
+#define MITTEX 300 // Kamera-/Aufnahmeposition (AUTO-GETXY und EXTRINSIK)
 
 volatile long encoderLinks = 0;
 volatile long encoderRechts = 0;

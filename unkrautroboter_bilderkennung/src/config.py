@@ -79,11 +79,18 @@ WORLD_OFFSET_XY_MM = (0.0, 0.0)
 # Objektive; finalize hebt bei zu großem Fit-Residuum selbst auf 4 an.
 EXTRINSIK_POLY_DEGREE = 3
 
+# Schlitten-X (mm), von der aus die Kamera ihr Bild macht – sowohl für jede
+# AUTO-Erkennung (Firmware: MITTEX) als auch für die EXTRINSIK-Aufnahme. Beide
+# MÜSSEN übereinstimmen, sonst passt das kalibrierte Polynom nicht zur
+# AUTO-Ansicht. Bei Änderung auch #define MITTEX in der Mega-Firmware anpassen
+# und EXTRINSIK neu laufen lassen.
+EXTRINSIK_CAPTURE_X_MM = 300
+
 # EXTRINSIK: Anzahl der Kamerabilder, die pro Kalibrierung gepoolt werden.
-# Kamera sitzt auf der X-Achse; die Aufnahme erfolgt bei X=220 (MITTEX = die
-# spätere AUTO-Aufnahmeposition), Board + Kamera stehen dabei still -> eins
-# würde genügen, ein paar mitteln nur das Sensor-/Ecken-Rauschen.
-# Die Board-Ecke (0,0) liegt (Schlitten zuvor auf X=0) unter dem
-# Bürstenmittelpunkt, Board-X-Achse parallel zur Bürstenfahrt -> Board-mm ==
-# mechanische mm. Feinkorrektur des Ursprungs nur über WORLD_OFFSET_XY_MM.
+# Kamera sitzt auf der X-Achse; die Aufnahme erfolgt bei EXTRINSIK_CAPTURE_X_MM,
+# Board + Kamera stehen dabei still -> eins würde genügen, ein paar mitteln nur
+# das Sensor-/Ecken-Rauschen. Die Board-Ecke (0,0) liegt (Schlitten zuvor auf
+# X=0) unter dem Bürstenmittelpunkt, Board-X-Achse parallel zur Bürstenfahrt ->
+# Board-mm == mechanische mm. Feinkorrektur des Ursprungs nur über
+# WORLD_OFFSET_XY_MM.
 EXTRINSIK_NUM_FRAMES = 5

@@ -421,7 +421,7 @@ class RobotControl:
                 status_bus.set_message(
                     "Extrinsik: Schlitten auf X=0 – Board mit Ecke (0,0) unter den "
                     "Bürstenmittelpunkt, X-Achse parallel zur Fahrtrichtung. Dann "
-                    "'Bild aufnehmen' (Kamera fährt zur Aufnahme auf X=220)"
+                    "'Bild aufnehmen' (Kamera fährt zur Aufnahme auf die AUTO-Position)"
                 )
                 if camera.is_camera_started():
                     _capture_preview(
@@ -458,23 +458,27 @@ class RobotControl:
 
     def _run_extrinsic_sequence(self):
         """Worker: Schlitten (= Kamera, sitzt auf der X-Achse) auf die
-        AUTO-Aufnahmeposition X=220 fahren, dann N Kamerabilder aufnehmen,
-        ChArUco-Ecken poolen, Pose schätzen und ground_homography.npz schreiben.
-        Das Board (X-Achse parallel zur Bürstenfahrt, Ecke (0,0) unter der
-        Bürste bei X=0) definiert das Koordinatensystem (Board-mm == mech-mm)."""
+        AUTO-Aufnahmeposition (config.EXTRINSIK_CAPTURE_X_MM = MITTEX) fahren,
+        dann N Rohbilder aufnehmen, ChArUco-Ecken poolen, Pose + Polynom
+        schätzen und ground_poly.npz schreiben. Das Board (X-Achse parallel zur
+        Bürstenfahrt, Ecke (0,0) unter der Bürste bei X=0) definiert das
+        Koordinatensystem (Board-mm == mech-mm)."""
         try:
             sess = self.extr_session
             if sess is None:
                 return
             n = int(getattr(config, "EXTRINSIK_NUM_FRAMES", 8))
+            cap_x = float(getattr(config, "EXTRINSIK_CAPTURE_X_MM", 300))
 
-            # Kamera auf die spätere AUTO-Aufnahmeposition (MITTEX = 220 mm)
-            status_bus.set_message("Extrinsik: Kamera fährt auf X=220 (AUTO-Position) ...")
-            self.send_command("GOTOX:220")
+            # Kamera auf die AUTO-Aufnahmeposition (muss = MITTEX der Firmware sein)
+            status_bus.set_message(
+                f"Extrinsik: Kamera fährt auf X={cap_x:.0f} (AUTO-Position) ..."
+            )
+            self.send_command(f"GOTOX:{cap_x:.0f}")
             line = self.serial.wait_for(("XREACHED:", "FAULT:"), timeout=45.0)
             if line is None or line.startswith("FAULT"):
                 status_bus.set_message(
-                    f"Extrinsik: Anfahren X=220 fehlgeschlagen ({line}) – abgebrochen"
+                    f"Extrinsik: Anfahren X={cap_x:.0f} fehlgeschlagen ({line}) – abgebrochen"
                 )
                 return
             time.sleep(0.5)  # Nachschwingen abklingen lassen
