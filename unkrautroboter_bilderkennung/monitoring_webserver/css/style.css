@@ -59,16 +59,15 @@ body {
     padding: 30px 20px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
     color: #fff;
-    min-width: 180px;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     margin: 0;
     flex: 1 1 0;
     min-width: 0;
+    /* allow shrinking below content width in the row flex layout */
     text-align: center;
 }
-
 
 .stream-wrapper {
     width: 100%;
@@ -143,22 +142,6 @@ body {
     /* above crosshair */
 }
 
-#joybtn {
-    margin-top: 8px;
-    width: 100%;
-    height: 40px;
-    border-radius: 6px;
-    border: 1px solid #777;
-    background: #2a2a2a;
-    color: #fff;
-    font-size: 14px;
-    cursor: pointer;
-}
-
-#joybtn:active {
-    background: #333;
-}
-
 img {
     width: 100%;
     max-width: 1280px;
@@ -179,7 +162,11 @@ img {
     padding: 30px 20px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
     color: #fff;
+    width: 340px;
     min-width: 180px;
+    /* fixed basis: a flex item otherwise sizes to its widest unwrapped line
+       (e.g. a long status message) instead of wrapping inside a stable column */
+    flex: 0 1 auto;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -189,12 +176,6 @@ img {
     /* clip children to rounded corners */
     gap: 16px;
     /* unified vertical spacing between children */
-}
-
-#mode-selector label {
-    font-size: 1.2em;
-    margin: 0;
-    /* spacing handled by parent gap */
 }
 
 select {
@@ -221,36 +202,37 @@ select {
     z-index: 2;
 }
 
+/* Shared dark panel: status/arduino/last-capture/reset/training boxes */
+.panel {
+    width: 100%;
+    background: #222;
+    border-radius: 8px;
+    padding: 12px;
+    color: #fff;
+    box-sizing: border-box;
+}
+
 /* Status and last-capture panels */
-#status-box {
-    width: 100%;
-    background: #222;
-    border-radius: 8px;
-    padding: 12px;
-    color: #fff;
-    font-size: 1em;
-    min-height: 70px;
-    box-sizing: border-box;
-}
-
+#status-box,
 #arduino-box {
-    width: 100%;
-    background: #222;
-    border-radius: 8px;
-    padding: 12px;
-    color: #fff;
     font-size: 1em;
     min-height: 70px;
-    box-sizing: border-box;
+    overflow-wrap: break-word;
 }
 
-#last-capture-box {
-    width: 100%;
-    background: #222;
-    border-radius: 8px;
-    padding: 12px;
-    color: #fff;
-    box-sizing: border-box;
+.temp-warn {
+    color: #ffd600;
+    font-weight: bold;
+}
+
+.temp-hot {
+    color: #ff3333;
+    font-weight: bold;
+}
+
+.status-message {
+    color: #9cf;
+    overflow-wrap: break-word;
 }
 
 #last-capture-img {
@@ -273,22 +255,14 @@ select {
     color: #aaa;
 }
 
-#reset-box {
-    width: 100%;
-    background: #222;
-    border-radius: 8px;
-    padding: 12px;
-    color: #fff;
-    box-sizing: border-box;
-}
-
-.rb-title {
+.panel-title {
     font-weight: bold;
     margin-bottom: 6px;
 }
 
-#reset-btn.wide {
-    margin-top: 10px;
+/* Shared "wide" button: reset, training, and the joypad capture button */
+.wide {
+    margin-top: 8px;
     width: 100%;
     height: 40px;
     border-radius: 6px;
@@ -299,17 +273,16 @@ select {
     cursor: pointer;
 }
 
-#reset-btn.wide:active {
+.wide:active {
     background: #333;
 }
 
+.wide:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 #training-box {
-    width: 100%;
-    background: #222;
-    border-radius: 8px;
-    padding: 12px;
-    color: #fff;
-    box-sizing: border-box;
     margin-top: 10px;
 }
 
@@ -330,22 +303,6 @@ select {
     color: #aaa;
     margin: 4px 0;
     word-break: break-word;
-}
-
-#training-btn.wide {
-    margin-top: 8px;
-    width: 100%;
-    height: 40px;
-    border-radius: 6px;
-    border: 1px solid #777;
-    background: #2a2a2a;
-    color: #fff;
-    cursor: pointer;
-}
-
-#training-btn.wide:disabled {
-    opacity: 0.5;
-    cursor: default;
 }
 
 .training-skip {

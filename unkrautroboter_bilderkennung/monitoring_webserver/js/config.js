@@ -17,7 +17,7 @@ function streamUrl() {
 }
 
 function lastCaptureUrl(ts) {
-    return `http://${effectiveHost()}:${CONFIG.HTTP_PORT}/last_capture.jpg?ts=${ts}`;
+    return `http://${effectiveHost()}:${CONFIG.HTTP_PORT}/last_capture.png?ts=${ts}`;
 }
 
 function wsUrl() {

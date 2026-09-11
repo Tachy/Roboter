@@ -31,17 +31,17 @@ function updateStatusBox(data) {
     let cpuTempVal = null;
     if (typeof data.cpu_temp === 'number') cpuTempVal = data.cpu_temp;
     else if (typeof data.cpu_temp === 'string' && data.cpu_temp.match(/^\d+(\.\d+)?/)) cpuTempVal = parseFloat(data.cpu_temp);
-    let cpuTempColor = '';
+    let cpuTempClass = '';
     if (cpuTempVal !== null) {
-        if (cpuTempVal >= 70) cpuTempColor = 'color:#ff3333;font-weight:bold;';
-        else if (cpuTempVal >= 60) cpuTempColor = 'color:#ffd600;font-weight:bold;';
+        if (cpuTempVal >= 70) cpuTempClass = 'temp-hot';
+        else if (cpuTempVal >= 60) cpuTempClass = 'temp-warn';
     }
     const cpuTempStr = cpuTempVal !== null ? cpuTempVal.toFixed(1) + '°C' : (data.cpu_temp ?? '-');
 
     let html = '';
     html += htmlRow('Modus',    data.mode ?? '-');
     html += htmlRow('Stream',   data.stream ? 'aktiv' : 'inaktiv');
-    html += `CPU-Temp: <b style="${cpuTempColor}">${cpuTempStr}</b><br>`;
+    html += `CPU-Temp: <b class="${cpuTempClass}">${cpuTempStr}</b><br>`;
     html += htmlRow('CPU Takt', typeof data.cpu_freq === 'number' ? data.cpu_freq + ' MHz' : (data.cpu_freq ?? '-'));
     html += htmlRow('CPU-Last', typeof data.cpu_load === 'number' ? data.cpu_load + ' %'   : (data.cpu_load ?? '-'));
     html += htmlRow('Zeit',     data.time   ?? '-');
@@ -53,7 +53,7 @@ function updateStatusBox(data) {
     if (typeof data.world_transform_ready !== 'undefined') {
         html += htmlRow('Extrinsik', data.world_transform_ready ? 'bereit' : 'nicht bereit');
         if (data.message && (data.mode === 'EXTRINSIK' || data.mode === 'DISTORTION')) {
-            html += `<span style="color:#9cf;">${data.message}</span><br>`;
+            html += `<span class="status-message">${data.message}</span><br>`;
         }
     }
     if (data.mode === 'MANUAL' && data.joystick && typeof data.joystick.x === 'number' && typeof data.joystick.y === 'number') {

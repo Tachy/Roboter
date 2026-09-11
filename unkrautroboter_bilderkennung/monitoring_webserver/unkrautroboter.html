@@ -19,28 +19,28 @@
                 <option value="EXTRINSIK">EXTRINSIK</option>
             </select>
 
-            <div id="status-box">
+            <div id="status-box" class="panel">
                 <b>Status:</b><br>
                 <span id="status-content">Warte auf Statusdaten ...</span>
             </div>
 
-            <div id="arduino-box">
+            <div id="arduino-box" class="panel">
                 <b>Arduino:</b><br>
                 <span id="arduino-content">–</span>
             </div>
 
-            <div id="last-capture-box">
-                <div class="lc-title">Letzte Aufnahme</div>
+            <div id="last-capture-box" class="panel">
+                <div class="panel-title">Letzte Aufnahme</div>
                 <img id="last-capture-img" src="" alt="Letzte Aufnahme" />
                 <div id="last-capture-time">Letzte Aufnahme: –</div>
                 <div id="last-capture-empty">Noch keine Aufnahme</div>
             </div>
-            <div id="reset-box">
-                <div class="rb-title">Dienst</div>
+            <div id="reset-box" class="panel">
+                <div class="panel-title">Dienst</div>
                 <button id="reset-btn" type="button" class="wide">Reset</button>
             </div>
-            <div id="training-box">
-                <div class="rb-title">Training</div>
+            <div id="training-box" class="panel">
+                <div class="panel-title">Training</div>
                 <div id="training-status" class="idle">–</div>
                 <div id="training-meta">–</div>
                 <button id="training-btn" type="button" class="wide">Trainieren &amp; deployen</button>
@@ -57,7 +57,7 @@
                     <div id="joypad">
                         <div class="stick"></div>
                     </div>
-                    <button id="joybtn" type="button">Bild aufnehmen</button>
+                    <button id="joybtn" type="button" class="wide">Bild aufnehmen</button>
                 </div>
             </div>
         </div>
