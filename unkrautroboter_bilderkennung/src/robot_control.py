@@ -65,31 +65,31 @@ def _load_persisted_mode():
 
 # --- Vorschaubild-Helfer (L3: war 6x als Copy-Paste im Modul) ---
 def _to_bgr(arr):
-    """picamera2-Array (RGBA/RGB/sonstiges) nach BGR wandeln."""
+    """picamera2-Array -> BGR-ndarray für OpenCV.
+
+    `capture_array()` liest den `main`-Stream (Format "RGB888"), der laut
+    picamera2 selbst (FORMAT_TABLE: "RGB888": "BGR") bereits B,G,R-Byteorder
+    liefert. Kein weiterer Kanaltausch nötig — sonst werden Rot und Blau
+    vertauscht.
+    """
     if arr is None:
         return None
     if arr.ndim == 3 and arr.shape[2] == 4:
         return cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-    if arr.ndim == 3 and arr.shape[2] == 3:
-        return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
     return arr
 
 
-def _publish_preview(bgr, text=None, target_w=320, quality=85):
-    """Verkleinertes Vorschaubild (+ optionale Statusmeldung) veröffentlichen."""
+def _publish_preview(bgr, text=None):
+    """Vorschaubild in Originalauflösung (+ optionale Statusmeldung)
+    veröffentlichen. Skalierung fürs Anzeigen macht der Browser."""
     if bgr is None:
         return
-    h, w = bgr.shape[:2]
-    scale = target_w / float(w)
-    preview = cv2.resize(
-        bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA
-    )
     if text is not None:
         try:
             status_bus.set_message(text)
         except Exception:
             pass
-    camera._encode_and_store_last_capture(preview, quality=quality)
+    camera._encode_and_store_last_capture(bgr)
 
 
 def _capture_preview(text=None):
@@ -468,12 +468,23 @@ class RobotControl:
         schätzen und ground_poly.npz schreiben. Das Board (X-Achse parallel zur
         Bürstenfahrt, Ecke (0,0) unter der Bürste bei X=0) definiert das
         Koordinatensystem (Board-mm == mech-mm)."""
+        stream_was_active = False
         try:
             sess = self.extr_session
             if sess is None:
                 return
             n = int(getattr(config, "EXTRINSIK_NUM_FRAMES", 8))
             cap_x = float(getattr(config, "EXTRINSIK_CAPTURE_X_MM", 300))
+
+            # MJPEG-Stream pausieren: läuft in einem eigenen Thread und ruft
+            # parallel cv2 auf (Farbkonvertierung/JPEG-Encode) -- das ist nicht
+            # threadsicher gegenüber der ArUco/ChArUco-Erkennung hier und kann zu
+            # sporadischen Fehlerkennungen führen (0 Ecken trotz gutem Bild).
+            # Eigene Fortschritts-Vorschau (_publish_preview) läuft unabhängig
+            # davon über /last_capture weiter.
+            stream_was_active = camera.stream_active
+            if stream_was_active:
+                camera.stop_stream()
 
             # Kamera auf die AUTO-Aufnahmeposition (muss = MITTEX der Firmware sein)
             status_bus.set_message(
@@ -499,13 +510,20 @@ class RobotControl:
                 return
             if not isinstance(frames, list):
                 frames = [frames]
+            # Debug: jedes Rohbild in Originalauflösung (mit eingezeichneten
+            # Markern, wie an solvePnP übergeben) ablegen, damit sich eine
+            # schlechte Kalibrierung nachträglich am Bild prüfen lässt.
+            debug_dir = Path("./calibration/extrinsic_debug")
+            debug_dir.mkdir(parents=True, exist_ok=True)
             for i, bgr in enumerate(frames):
                 if self.get_mode() != "EXTRINSIK":
                     status_bus.set_message("Extrinsik: abgebrochen (Moduswechsel)")
                     return
                 ok, msg, preview = sess.add_frame(bgr)
+                full_res = preview if preview is not None else bgr
+                cv2.imwrite(str(debug_dir / f"frame_{i + 1}.png"), full_res)
                 _publish_preview(
-                    preview if preview is not None else bgr,
+                    full_res,
                     text=f"Extrinsik: Bild {sess.n_frames}/{n} ({msg})",
                 )
                 if not ok:
@@ -558,6 +576,8 @@ class RobotControl:
             except Exception:
                 pass
         finally:
+            if stream_was_active:
+                camera.start_stream()
             self._extr_seq_active = False
             self.extr_session = None
 

@@ -8,17 +8,13 @@ import numpy as np
 import cv2
 from . import camera, status_bus, config
 
-# Haupt-Board (EXTRINSIK): das große Board am Boden.
-SQUARES_X = 10
-SQUARES_Y = 15
-SQUARE_MM = 50.0
-MARKER_MM = 35.0
 DICT_NAME = "DICT_5X5_1000"
 
-# Eigenes, kleineres Board NUR für DISTORTION (K,D) – Parameter aus config.
-# Passt quer auf A4, lässt sich absolut plan aufziehen. Gleiches Wörterbuch wie
-# das Haupt-Board. Für die Intrinsik ist der ABSOLUTE Maßstab egal (K,D sind
-# skaleninvariant) – wichtig sind Planheit und volle Sichtbarkeit.
+# Das eine Board – Parameter aus config. Passt quer auf A4, lässt sich absolut
+# plan aufziehen. Wird für DISTORTION (K,D) UND für EXTRINSIK (Pose) genutzt.
+# Für die Intrinsik ist der ABSOLUTE Maßstab egal (K,D sind skaleninvariant) –
+# wichtig sind Planheit und volle Sichtbarkeit. Für EXTRINSIK muss das Board
+# vollständig im Bild sichtbar sein (siehe ExtrinsicSession).
 DISTORTION_SQUARES_X, DISTORTION_SQUARES_Y = config.DISTORTION_BOARD_SQUARES
 DISTORTION_SQUARE_MM = float(config.DISTORTION_BOARD_SQUARE_MM)
 DISTORTION_MARKER_MM = float(config.DISTORTION_BOARD_MARKER_MM)
@@ -45,13 +41,7 @@ def get_aruco_dict():
     return ar.getPredefinedDictionary(d)
 
 
-def make_charuco_board(
-    aruco_dict,
-    squares_x=SQUARES_X,
-    squares_y=SQUARES_Y,
-    square_mm=SQUARE_MM,
-    marker_mm=MARKER_MM,
-):
+def make_charuco_board(aruco_dict, squares_x, squares_y, square_mm, marker_mm):
     ar = cv2.aruco
     if hasattr(ar, "CharucoBoard_create"):
         return ar.CharucoBoard_create(
@@ -60,8 +50,8 @@ def make_charuco_board(
     return ar.CharucoBoard((squares_x, squares_y), square_mm, marker_mm, aruco_dict)
 
 
-def make_distortion_board(aruco_dict):
-    """Kleines A4-Board – wird ausschließlich im DISTORTION-Modus genutzt."""
+def make_board(aruco_dict):
+    """Das A4-Board – für DISTORTION und EXTRINSIK gleichermaßen genutzt."""
     return make_charuco_board(
         aruco_dict,
         DISTORTION_SQUARES_X,
@@ -147,7 +137,7 @@ class CalibrationSession:
         self.aruco_dict = get_aruco_dict()
         # DISTORTION nutzt das kleine A4-Board (plan aufziehbar), nicht das
         # große Boden-Board der EXTRINSIK.
-        self.board = make_distortion_board(self.aruco_dict)
+        self.board = make_board(self.aruco_dict)
         self.last_counts = (0, 0)  # (n_mk, n_ch)
 
     # Kein Overlay mehr im Hardware-Stream
@@ -190,16 +180,10 @@ class CalibrationSession:
         self.marker_snapshots.append((mk_corners, mk_ids, self.board))
         self.snapshots += 1
 
-        # Mini-Vorschau mit Hinweis "Aufnahme X/Y" an Webserver schicken
+        # Vorschau (Originalauflösung) mit Hinweis "Aufnahme X/Y" an Webserver schicken
         try:
-            h, w = bgr.shape[:2]
-            target_w = 320
-            scale = target_w / float(w)
-            preview = cv2.resize(
-                bgr, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA
-            )
             text = f"Aufnahme {self.snapshots}/{self.target}"
-            camera._encode_and_store_last_capture(preview, quality=85)
+            camera._encode_and_store_last_capture(bgr)
             try:
                 status_bus.set_message(text)
             except Exception:
@@ -252,10 +236,15 @@ GROUND_H_FILE = OUT_DIR / "ground_homography.npz"  # nur noch Legacy-Fallback
 class ExtrinsicSession:
     """EXTRINSIK v3.1 – Rohbild-Pipeline, Ausgabe als Polynom "Kurvenmatrix".
 
-    Voraussetzung (physisch am Gerät hergestellt): Bürste auf Schlitten-X=0,
-    Board-Ecke (0,0) unter den Bürstenmittelpunkt, Board-X-Achse exakt parallel
-    zur Bürstenfahrt -> **Board-mm == mechanische mm**. Die Aufnahme erfolgt
-    von der Kameraposition config.EXTRINSIK_CAPTURE_X_MM (= MITTEX / AUTO-Aufnahme).
+    Board: das kleine DISTORTION-Board (config.DISTORTION_BOARD_*, dasselbe wie
+    im DISTORTION-Modus) – muss vollständig im Bild sichtbar sein. Voraussetzung
+    (physisch am Gerät hergestellt): Board-X-Achse exakt parallel zur
+    Bürstenfahrt (ein reiner XY-Offset korrigiert keine Drehung). Die
+    mechanische Position der Board-Ecke (0,0), vom Bürsten-Nullpunkt
+    (Schlitten-X=0, Bürstenmittelpunkt) aus gemessen, wird über
+    config.EXTRINSIK_BOARD_ORIGIN_OFFSET_MM eingetragen -> Board-mm + Offset ==
+    mechanische mm. Die Aufnahme erfolgt von der Kameraposition
+    config.EXTRINSIK_CAPTURE_X_MM (= MITTEX / AUTO-Aufnahme).
 
     Ablauf: ChArUco auf den ROHbildern erkennen (mehrere gepoolt) ->
     cv2.solvePnP(K, D) -> Pose. Dann ein Welt-mm-Gitter über den sichtbaren
@@ -267,11 +256,25 @@ class ExtrinsicSession:
     def __init__(self):
         ensure_aruco_support()
         self.aruco_dict = get_aruco_dict()
-        self.board = make_charuco_board(self.aruco_dict)
+        self.board = make_board(self.aruco_dict)
         from . import geometry, config
 
         self._obj_all_mm = geometry.board_chessboard_corners_mm(self.board)  # (M,2)
         self.degree = int(getattr(config, "EXTRINSIK_POLY_DEGREE", 3))
+
+        offset = getattr(config, "EXTRINSIK_BOARD_ORIGIN_OFFSET_MM", (0.0, 0.0))
+        self._origin_offset_mm = np.asarray(offset, dtype=np.float64).reshape(2)
+
+        # Maximal mögliche Ausdehnung/Eckenzahl des konfigurierten Boards -
+        # Grundlage für die Abdeckungsprüfung in finalize() (skaliert automatisch
+        # mit der Boardgröße statt fest auf ein bestimmtes Board einzurasten).
+        self._board_n_corners = len(self._obj_all_mm)
+        self._board_x_span_max = float(
+            self._obj_all_mm[:, 0].max() - self._obj_all_mm[:, 0].min()
+        )
+        self._board_y_span_max = float(
+            self._obj_all_mm[:, 1].max() - self._obj_all_mm[:, 1].min()
+        )
 
         # Rohe Intrinsik K, D aus der DISTORTION-Kalibrierung.
         self.K = None
@@ -296,7 +299,7 @@ class ExtrinsicSession:
 
     def _obj3(self, ids):
         ids = np.asarray(ids).reshape(-1).astype(int)
-        xy = self._obj_all_mm[ids]
+        xy = self._obj_all_mm[ids] + self._origin_offset_mm
         return np.hstack([xy, np.zeros((len(ids), 1))]).astype(np.float64)
 
     def add_frame(self, bgr_raw):
@@ -351,13 +354,21 @@ class ExtrinsicSession:
         x_span, y_span = x1 - x0, y1 - y0
         uniq = len(np.unique(np.round(objp[:, :2], 1), axis=0))
 
-        # Abdeckungs-Prüfung: zu wenig / zu kleiner Board-Ausschnitt -> nichts
-        # speichern, den Bediener anleiten.
-        if uniq < 40 or x_span < 200.0 or y_span < 150.0:
+        # Abdeckungs-Prüfung: mindestens 80 % der maximal möglichen Board-
+        # Ausdehnung/Eckenzahl müssen sichtbar sein (skaliert mit der
+        # konfigurierten Boardgröße, statt fest auf ein bestimmtes Board zu
+        # zielen) -> sonst nichts speichern, den Bediener anleiten.
+        min_coverage = 0.8
+        min_uniq = max(4, int(min_coverage * self._board_n_corners))
+        min_x_span = min_coverage * self._board_x_span_max
+        min_y_span = min_coverage * self._board_y_span_max
+        if uniq < min_uniq or x_span < min_x_span or y_span < min_y_span:
             raise RuntimeError(
-                f"Board zu wenig im Bild: {uniq} versch. Ecken, sichtbar "
-                f"x {x_span:.0f} mm / y {y_span:.0f} mm. Board größer/näher/"
-                f"schärfer ins Bild bringen (mehr Marker, weniger Glanz)."
+                f"Board zu wenig im Bild: {uniq}/{self._board_n_corners} versch. "
+                f"Ecken, sichtbar x {x_span:.0f}/{self._board_x_span_max:.0f} mm / "
+                f"y {y_span:.0f}/{self._board_y_span_max:.0f} mm. Board "
+                f"vollständig, näher/schärfer ins Bild bringen (mehr Marker, "
+                f"weniger Glanz)."
             )
 
         flag = getattr(cv2, "SOLVEPNP_ITERATIVE", 0)

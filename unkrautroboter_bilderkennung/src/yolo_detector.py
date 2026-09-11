@@ -7,7 +7,6 @@ import cv2
 import logging
 import os
 import multiprocessing as mp
-import numpy as np
 import time
 import shutil
 import threading
@@ -102,7 +101,7 @@ except RuntimeError:
 def _mp_predict_worker(
     queue, image_path, weights, device, imgsz, conf, iou, use_parent_model=False
 ):
-    """Subprozess-Worker: Lädt YOLO, führt Inferenz aus und gibt (coords, annotated_jpeg_path) zurück.
+    """Subprozess-Worker: Lädt YOLO, führt Inferenz aus und gibt (coords, annotated_png_path) zurück.
 
     Wichtiger Hinweis: Um Deadlocks aufgrund begrenzter Pipe-Puffer zu vermeiden, wird die annotierte
     Vorschau nicht über die Queue (Bytes) übertragen, sondern in eine temporäre Datei geschrieben und
@@ -183,13 +182,12 @@ def _mp_predict_worker(
                     import tempfile as _tmp
                     import os as _os2
 
-                    # In temporäre Datei schreiben
-                    fd, tmppath = _tmp.mkstemp(prefix="yolo_ann_", suffix=".jpg")
+                    # Verlustfrei als PNG in temporäre Datei schreiben (Originalbild,
+                    # keine JPEG-Artefakte in der Vorschau).
+                    fd, tmppath = _tmp.mkstemp(prefix="yolo_ann_", suffix=".png")
                     try:
                         _os2.close(fd)
-                        ok = _cv2.imwrite(
-                            tmppath, ann, [int(_cv2.IMWRITE_JPEG_QUALITY), 85]
-                        )
+                        ok = _cv2.imwrite(tmppath, ann)
                         if ok:
                             annotated_path = tmppath
                             try:
@@ -281,7 +279,7 @@ def process_image(image_path):
             if img is not None and len(coords) > 0:
                 x, y = int(coords[0][0]), int(coords[0][1])
                 cv2.circle(img, (x, y), 10, (0, 255, 0), 2)
-                camera._encode_and_store_last_capture(img, quality=85)
+                camera._encode_and_store_last_capture(img)
                 logger.info(
                     f"[YOLO] Dummy-Preview aktualisiert. Erste Position: ({x},{y})"
                 )
@@ -377,13 +375,7 @@ def process_image(image_path):
                 with open(ann_path, "rb") as f:
                     ann_bytes = f.read()
                 try:
-                    if hasattr(camera, "_set_last_capture_bytes"):
-                        camera._set_last_capture_bytes(ann_bytes)  # type: ignore
-                    else:
-                        nparr = np.frombuffer(ann_bytes, dtype=np.uint8)
-                        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                        if img is not None:
-                            camera._encode_and_store_last_capture(img, quality=85)
+                    camera._set_last_capture_bytes(ann_bytes)
                 finally:
                     try:
                         import os as _os3

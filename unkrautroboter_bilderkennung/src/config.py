@@ -113,8 +113,14 @@ EXTRINSIK_CAPTURE_X_MM = 300
 # EXTRINSIK: Anzahl der Kamerabilder, die pro Kalibrierung gepoolt werden.
 # Kamera sitzt auf der X-Achse; die Aufnahme erfolgt bei EXTRINSIK_CAPTURE_X_MM,
 # Board + Kamera stehen dabei still -> eins würde genügen, ein paar mitteln nur
-# das Sensor-/Ecken-Rauschen. Die Board-Ecke (0,0) liegt (Schlitten zuvor auf
-# X=0) unter dem Bürstenmittelpunkt, Board-X-Achse parallel zur Bürstenfahrt ->
-# Board-mm == mechanische mm. Feinkorrektur des Ursprungs nur über
-# WORLD_OFFSET_XY_MM.
+# das Sensor-/Ecken-Rauschen. Board-X-Achse muss parallel zur Bürstenfahrt
+# liegen (das korrigiert kein Offset); die Position der Board-Ecke (0,0) wird
+# über EXTRINSIK_BOARD_ORIGIN_OFFSET_MM eingetragen.
 EXTRINSIK_NUM_FRAMES = 5
+
+# EXTRINSIK: mechanische Position (mm, Bürsten-Nullpunkt-Koordinaten: X=0 am
+# Schlitten = Bürstenmittelpunkt) der Board-Ecke (0,0) des kleinen Boards. Vom
+# Bürsten-Nullpunkt zur Board-Ecke (0,0) ausmessen und hier eintragen -
+# additiv auf die Board-mm-Koordinaten angewendet, bevor solvePnP läuft.
+# (0,0) bedeutet: Board-Ecke liegt exakt am Bürsten-Nullpunkt.
+EXTRINSIK_BOARD_ORIGIN_OFFSET_MM = (100.0, 200.0)

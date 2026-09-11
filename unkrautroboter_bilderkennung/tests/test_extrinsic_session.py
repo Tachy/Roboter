@@ -12,15 +12,15 @@ from src import calibration, geometry  # noqa: E402
 
 
 def _synthetic_pose():
-    # Kamera weit genug zurück, damit das ganze Board (500x750 mm) im 1280x720
-    # Bild liegt; Board-Mitte (~225, 375) landet nahe Bildmitte.
+    # Kamera nah genug, damit das ganze (kleine) Board -- Ecken bei x
+    # 35..210mm, y 35..140mm -- gut verteilt im 1280x720 Bild liegt.
     K = np.array([[950.0, 0.0, 640.0], [0.0, 950.0, 360.0], [0.0, 0.0, 1.0]])
     D = np.array([-0.14, 0.03, 0.0008, -0.0006, 0.0])  # milde Verzeichnung
     th = np.deg2rad(12.0)
     R = np.array(
         [[1, 0, 0], [0, np.cos(th), -np.sin(th)], [0, np.sin(th), np.cos(th)]]
     )
-    t = np.array([-225.0, -330.0, 1050.0])
+    t = np.array([-120.0, -80.0, 150.0])
     return K, D, R, t
 
 
@@ -41,7 +41,7 @@ def test_finalize_from_injected_corners(tmp_path, monkeypatch):
     sess.K, sess.D = K, D
     sess.img_shape = (720, 1280)
 
-    obj_all = sess._obj_all_mm  # (126, 2) Board-mm
+    obj_all = sess._obj_all_mm  # (24, 2) Board-mm
     # nur Ecken nehmen, die (verzeichnet) im Bild landen
     px_all = _project(obj_all, K, D, R, t)
     inb = (
@@ -49,7 +49,7 @@ def test_finalize_from_injected_corners(tmp_path, monkeypatch):
         & (px_all[:, 1] > 0) & (px_all[:, 1] < 720)
     )
     vis = np.where(inb)[0]
-    assert len(vis) > 40, "Testpose zeigt zu wenig Board"
+    assert len(vis) >= 20, "Testpose zeigt zu wenig Board"
 
     rng = np.random.default_rng(0)
     for _ in range(3):
@@ -80,13 +80,26 @@ def test_finalize_from_injected_corners(tmp_path, monkeypatch):
         assert gy == pytest.approx(obj_all[i, 1], abs=1.0)
 
 
-def test_distortion_uses_small_board_extrinsik_uses_big():
-    # DISTORTION: kleines A4-Board (7x5 -> 6x4 = 24 innere Ecken)
+def test_distortion_and_extrinsik_use_same_board():
+    # DISTORTION und EXTRINSIK nutzen beide das kleine A4-Board
+    # (7x5 -> 6x4 = 24 innere Ecken).
     cs = calibration.CalibrationSession(target_snapshots=5)
     assert cs.board.getChessboardCorners().shape[0] == 24
-    # EXTRINSIK: großes Boden-Board (10x15 -> 9x14 = 126)
     es = calibration.ExtrinsicSession()
-    assert es.board.getChessboardCorners().shape[0] == 126
+    assert es.board.getChessboardCorners().shape[0] == 24
+
+
+def test_obj3_applies_configured_origin_offset():
+    # EXTRINSIK_BOARD_ORIGIN_OFFSET_MM wird additiv auf die Board-mm-Koordinaten
+    # angewendet, bevor solvePnP läuft (mechanische Position der Board-Ecke
+    # (0,0), vom Bürsten-Nullpunkt aus gemessen).
+    sess = calibration.ExtrinsicSession()
+    sess._origin_offset_mm = np.array([100.0, 200.0])
+    ids = np.array([0, 1])
+    obj = sess._obj3(ids)
+    expected_xy = sess._obj_all_mm[ids] + np.array([100.0, 200.0])
+    assert obj[:, :2] == pytest.approx(expected_xy)
+    assert (obj[:, 2] == 0.0).all()
 
 
 def test_finalize_needs_frames(tmp_path, monkeypatch):
@@ -103,9 +116,9 @@ def test_finalize_rejects_poor_coverage(tmp_path, monkeypatch):
     K, D, R, t = _synthetic_pose()
     sess.K, sess.D = K, D
     sess.img_shape = (720, 1280)
-    # nur ein winziger Board-Fleck (x 50..120, y 300..380)
+    # nur ein winziger Board-Fleck (2x2 Ecken statt aller 6x4)
     obj = sess._obj_all_mm
-    small = obj[(obj[:, 0] <= 120) & (obj[:, 1] >= 300) & (obj[:, 1] <= 380)]
+    small = obj[(obj[:, 0] <= 70.0) & (obj[:, 1] <= 70.0)]
     sess.img_pts.append(_project(small, K, D, R, t))
     sess.obj_pts.append(np.hstack([small, np.zeros((len(small), 1))]))
     sess.n_frames = 1
@@ -119,10 +132,15 @@ def test_add_frame_on_rendered_board_then_finalize(tmp_path, monkeypatch):
     monkeypatch.setattr(geometry, "_C", None, raising=False)
 
     sess = calibration.ExtrinsicSession()
+    # Testet die Identitäts-Abbildung unabhängig vom konfigurierten
+    # EXTRINSIK_BOARD_ORIGIN_OFFSET_MM (separat in test_finalize_from_injected_corners
+    # bzw. implizit hier auf 0 gehalten).
+    sess._origin_offset_mm = np.zeros(2)
     # Board-Bild: 1 px == 1 mm, Rand m -> Board-mm (x,y) == Pixel (x+m, y+m).
     # Passende Lochkamera: fx=fy=1, Hauptpunkt (m,m), R=I, Kamera bei Z=1.
+    # Board-Außenmaß: 7x5 Felder à 35mm = 245x175mm.
     m = 60
-    img = sess.board.generateImage((500 + 2 * m, 750 + 2 * m), marginSize=m)
+    img = sess.board.generateImage((245 + 2 * m, 175 + 2 * m), marginSize=m)
     bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     sess.K = np.array([[1.0, 0.0, float(m)], [0.0, 1.0, float(m)], [0.0, 0.0, 1.0]])
     sess.D = np.zeros(5)
@@ -138,7 +156,7 @@ def test_add_frame_on_rendered_board_then_finalize(tmp_path, monkeypatch):
     assert fit_rms < 1.0
 
     geometry.load_ground_poly(str(path))
-    # Pixel der Board-mm (400, 500) == (460, 560) -> zurück auf ~(400, 500)
-    gx, gy = geometry.pixel_to_world(460.0, 560.0)
-    assert gx == pytest.approx(400.0, abs=2.0)
-    assert gy == pytest.approx(500.0, abs=2.0)
+    # Pixel der Board-mm (150, 90) == (210, 150) -> zurück auf ~(150, 90)
+    gx, gy = geometry.pixel_to_world(210.0, 150.0)
+    assert gx == pytest.approx(150.0, abs=2.0)
+    assert gy == pytest.approx(90.0, abs=2.0)

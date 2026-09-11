@@ -41,7 +41,7 @@ class StreamHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         # /last_capture: immer bedienen, auch wenn der Stream aus ist
         if self.path.startswith("/last_capture"):
-            # Kleines Hilfsbild: letztes per capture_image aufgenommenes JPEG ausliefern
+            # Letztes aufgenommenes Bild ausliefern (PNG, Originalauflösung)
             with _last_capture_lock:
                 data = _last_capture_bytes
                 ts = _last_capture_ts
@@ -53,7 +53,7 @@ class StreamHandler(BaseHTTPRequestHandler):
                         "Cache-Control", "no-cache, private, max-age=0, must-revalidate"
                     )
                     self.send_header("Pragma", "no-cache")
-                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Type", "image/png")
                     self.send_header("Content-Length", str(len(data)))
                     self.send_header("Connection", "close")
                     self.end_headers()
@@ -119,28 +119,27 @@ def get_cpu_temperature():
         return "N/A"
 
 
-# Letztes aufgenommenes Bild (JPEG) im Speicher halten, inkl. Zeitstempel
+# Letztes aufgenommenes Bild im Speicher halten, inkl. Zeitstempel. Immer
+# verlustfrei als PNG in Originalauflösung — Skalierung fürs Anzeigen macht
+# der Browser, nicht der Server.
 _last_capture_lock = threading.Lock()
 _last_capture_bytes: bytes | None = None
 _last_capture_ts: float | None = None
 
 
 def _set_last_capture_bytes(data: bytes) -> None:
-    """Safely store last-capture JPEG bytes and timestamp."""
+    """Safely store last-capture PNG bytes and timestamp."""
     global _last_capture_bytes, _last_capture_ts
     with _last_capture_lock:
         _last_capture_bytes = data
         _last_capture_ts = time.time()
 
 
-def _encode_and_store_last_capture(bgr_image, quality: int = 90) -> bool:
-    """Encode a BGR image to JPEG and store it for the preview. Returns True on success."""
+def _encode_and_store_last_capture(bgr_image) -> bool:
+    """Encode a BGR image to PNG (Originalauflösung, verlustfrei) and store it
+    for /last_capture.png. Returns True on success."""
     try:
-        ok_enc, enc = cv2.imencode(
-            ".jpg",
-            bgr_image,
-            [int(cv2.IMWRITE_JPEG_QUALITY), max(1, min(100, quality))],
-        )
+        ok_enc, enc = cv2.imencode(".png", bgr_image)
         if ok_enc:
             _set_last_capture_bytes(enc.tobytes())
             return True
@@ -244,7 +243,7 @@ def capture_image(filename: str, size):
     started_here = ensure_camera_started()
     try:
         bgr = capture_still_array(size)
-        _encode_and_store_last_capture(bgr, quality=90)
+        _encode_and_store_last_capture(bgr)
         if not cv2.imwrite(filename, bgr):
             raise RuntimeError(f"cv2.imwrite fehlgeschlagen: {filename}")
         logger.info(f"Bild aufgenommen: {filename}")
@@ -283,13 +282,18 @@ _stream_stop = threading.Event()
 
 
 def _arr_to_bgr(arr):
-    """picamera2-Array (RGBA/RGB) -> BGR."""
+    """picamera2-Array -> BGR-ndarray für OpenCV.
+
+    Das `main`-Stream-Format ist "RGB888" konfiguriert, aber picamera2 liefert
+    dafür (laut eigenem FORMAT_TABLE in picamera2/request.py: "RGB888": "BGR")
+    bereits Bytes in B,G,R-Reihenfolge — exakt was OpenCV erwartet. Ein
+    zusätzlicher COLOR_RGB2BGR-Tausch hier würde Rot und Blau ein zweites Mal
+    vertauschen und Bilder falsch einfärben.
+    """
     if arr is None:
         return None
     if arr.ndim == 3 and arr.shape[2] == 4:
         return cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-    if arr.ndim == 3 and arr.shape[2] == 3:
-        return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
     return arr
 
 
