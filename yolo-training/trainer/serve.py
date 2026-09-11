@@ -140,7 +140,7 @@ def start(kind: str, deploy: bool, skip_export: bool, base: str = "") -> bool:
 
 PAGE = """<!doctype html><meta charset=utf-8><meta http-equiv=refresh content=5>
 <title>Unkraut – Train &amp; Deploy</title>
-<style>body{{font:15px/1.5 system-ui;margin:2rem;max-width:1100px}}
+<style>body{{font:15px/1.5 Arial, sans-serif;margin:2rem;max-width:1100px}}
 button{{font-size:1.05rem;padding:.55rem 1.3rem}}
 pre{{background:#111;color:#ddd;padding:1rem;overflow:auto;max-height:65vh;white-space:pre-wrap}}
 .r{{color:#c60}}.i{{color:#080}}</style>
