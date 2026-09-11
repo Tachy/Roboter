@@ -65,8 +65,8 @@ static volatile bool serialLineReady = false;
 //     zu lange dauert oder die Encoder keinen Fortschritt mehr melden. ---
 // Werte großzügig; am Prüfstand feinjustieren. MOVE_TIMEOUT_MS ist die harte
 // Obergrenze, STALL_* nur die schnellere Reaktion bei echtem Stillstand.
-#define MOVE_TIMEOUT_MS 20000UL  // Gesamt-Timeout je Bewegung (setzeX/Z, fahreStrecke)
-#define CALIB_TIMEOUT_MS 15000UL // Timeout je Referenzfahrt in setup()
+#define MOVE_TIMEOUT_MS 50000UL  // Gesamt-Timeout je Bewegung (setzeX/Z, fahreStrecke)
+#define CALIB_TIMEOUT_MS 50000UL // Timeout je Referenzfahrt in setup()
 #define STALL_TIMEOUT_MS 3000UL  // kein Encoder-Fortschritt -> Abbruch
 #define STALL_MIN_DELTA 3        // Impulse, die als "Fortschritt" zählen
 
